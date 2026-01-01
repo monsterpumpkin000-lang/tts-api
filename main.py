@@ -22,3 +22,30 @@ async def tts(req: TTSRequest):
     )
     await communicate.save(filename)
     return {"file": filename}
+
+
+from fastapi import FastAPI
+from pydantic import BaseModel
+
+app = FastAPI()
+
+class ScriptRequest(BaseModel):
+    theme: str
+    audience: str
+    duration_sec: int = 30
+
+@app.post("/generate-script")
+async def generate_script(req: ScriptRequest):
+    # ⬇️ nanti ini bisa kamu ganti OpenAI API
+    hook = f"Small daily habits fuel the unshakeable confidence you crave."
+    body = f"Consistent practice in everyday situations gradually strengthens confidence without pressure."
+    ending = f"Small actions lead to bigger change."
+
+    voice_over = f"{hook}\n\n{body}\n\n{ending}"
+
+    return {
+        "hook": hook,
+        "body": body,
+        "ending": ending,
+        "voiceOverText": voice_over
+    }
