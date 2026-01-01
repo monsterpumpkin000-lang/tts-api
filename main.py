@@ -26,7 +26,13 @@ async def tts(req: TTSRequest):
     )
 
     await communicate.save(filename)
-    return {"file": filename}
+
+    return FileResponse(
+        path=filename,
+        media_type="audio/mpeg",
+        filename=filename
+    )
+
 
 
 # =========================
