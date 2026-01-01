@@ -36,56 +36,6 @@ async def tts(req: TTSRequest):
         filename="voice.mp3"
     )
 
-
-# =========================
-# VIDEO RENDER (FFmpeg)
-# =========================
-@app.post("/render-video")
-async def render_video(
-    image: UploadFile = File(...),
-    audio: UploadFile = File(...)
-):
-    image_path = f"/tmp/{uuid.uuid4()}.png"
-    audio_path = f"/tmp/{uuid.uuid4()}.mp3"
-    output_path = f"/tmp/{uuid.uuid4()}.mp4"
-
-    try:
-        with open(image_path, "wb") as f:
-            f.write(await image.read())
-
-        with open(audio_path, "wb") as f:
-            f.write(await audio.read())
-
-        cmd = [
-            "ffmpeg", "-y",
-            "-loop", "1", "-i", image_path,
-            "-i", audio_path,
-            "-c:v", "libx264",
-            "-preset", "veryfast",
-            "-tune", "stillimage",
-            "-pix_fmt", "yuv420p",
-            "-c:a", "aac",
-            "-shortest",
-            "-vf",
-            "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
-            output_path
-        ]
-
-        subprocess.run(cmd, check=True)
-
-        return FileResponse(
-            output_path,
-            media_type="video/mp4",
-            filename="shorts.mp4"
-        )
-
-    finally:
-        # cleanup (SUPER IMPORTANT)
-        for f in [image_path, audio_path]:
-            if os.path.exists(f):
-                os.remove(f)
-
-
 # =========================
 # SCRIPT GENERATOR
 # =========================
@@ -111,3 +61,44 @@ async def generate_script(req: ScriptRequest):
         "ending": ending,
         "voiceOverText": voice_over
     }
+
+# =========================
+# RENDER VIDEO (FFMPEG)
+# =========================
+@app.post("/render-video")
+async def render_video(
+    image: UploadFile = File(...),
+    audio: UploadFile = File(...)
+):
+    image_path = f"/tmp/{uuid.uuid4()}.png"
+    audio_path = f"/tmp/{uuid.uuid4()}.mp3"
+    output_path = f"/tmp/{uuid.uuid4()}.mp4"
+
+    with open(image_path, "wb") as f:
+        f.write(await image.read())
+
+    with open(audio_path, "wb") as f:
+        f.write(await audio.read())
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-loop", "1", "-i", image_path,
+        "-i", audio_path,
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-tune", "stillimage",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac",
+        "-shortest",
+        "-vf",
+        "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
+        output_path
+    ]
+
+    subprocess.run(cmd, check=True)
+
+    return FileResponse(
+        output_path,
+        media_type="video/mp4",
+        filename="shorts.mp4"
+    )
