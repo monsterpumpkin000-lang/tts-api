@@ -11,7 +11,7 @@ app = FastAPI()
 class TTSRequest(BaseModel):
     text: str
     voice: str = "en-US-JennyNeural"
-    rate: str = "-10%"
+    rate: str = "+10%"
     pitch: str = "+0Hz"
 
 @app.post("/tts")
