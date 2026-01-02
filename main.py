@@ -1,12 +1,12 @@
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-import uuid, os, subprocess, requests, random, math
+import uuid, os, subprocess, requests, math
 import edge_tts
 
-# =====================================================
+# =========================
 # APP INIT
-# =====================================================
+# =========================
 app = FastAPI()
 
 BASE_URL = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").rstrip("/")
@@ -19,23 +19,9 @@ os.makedirs(VIDEO_DIR, exist_ok=True)
 app.mount("/audio", StaticFiles(directory=AUDIO_DIR), name="audio")
 app.mount("/output", StaticFiles(directory=VIDEO_DIR), name="output")
 
-# =====================================================
-# UTILS
-# =====================================================
-def ffmpeg_safe_text(text: str) -> str:
-    """Escape text supaya drawtext tidak crash"""
-    return (
-        text
-        .replace("\\", "\\\\")
-        .replace(":", "\\:")
-        .replace("'", "\\'")
-        .replace('"', '\\"')
-        .replace("\n", " ")
-    )
-
-# =====================================================
+# =========================
 # 1. SCRIPT GENERATOR
-# =====================================================
+# =========================
 class ScriptRequest(BaseModel):
     theme: str
     audience: str
@@ -52,9 +38,9 @@ async def generate_script(req: ScriptRequest):
         "video_query": "cinematic calm nature"
     }
 
-# =====================================================
-# 2. TEXT TO SPEECH (RETURN URL)
-# =====================================================
+# =========================
+# 2. TEXT TO SPEECH (URL)
+# =========================
 class TTSRequest(BaseModel):
     text: str
 
@@ -79,17 +65,15 @@ async def tts(req: TTSRequest):
         "duration": duration
     }
 
-# =====================================================
-# 3. GET STOCK VIDEO (PEXELS)
-# =====================================================
+# =========================
+# 3. GET STOCK VIDEO
+# =========================
 class StockVideoRequest(BaseModel):
     query: str
 
 @app.post("/get-stock-video")
 async def get_stock_video(req: StockVideoRequest):
-    headers = {
-        "Authorization": os.getenv("PEXELS_API_KEY")
-    }
+    headers = {"Authorization": os.getenv("PEXELS_API_KEY")}
 
     url = (
         "https://api.pexels.com/videos/search"
@@ -100,13 +84,11 @@ async def get_stock_video(req: StockVideoRequest):
     res.raise_for_status()
 
     data = res.json()
-    video_url = data["videos"][0]["video_files"][0]["link"]
+    return {"video_url": data["videos"][0]["video_files"][0]["link"]}
 
-    return {"video_url": video_url}
-
-# =====================================================
-# 4. RENDER VIDEO (ALL EDITING HERE)
-# =====================================================
+# =========================
+# 4. RENDER VIDEO (STABLE)
+# =========================
 class RenderRequest(BaseModel):
     video_url: str
     audio_url: str
@@ -119,27 +101,27 @@ async def render_video(req: RenderRequest):
     output_file = f"{uuid.uuid4().hex}.mp4"
     output_path = os.path.join(VIDEO_DIR, output_file)
 
-    # Download assets (URL WAJIB full https)
+    # Download assets
     open(video_path, "wb").write(requests.get(req.video_url, timeout=30).content)
     open(audio_path, "wb").write(requests.get(req.audio_url, timeout=30).content)
 
-    safe_text = ffmpeg_safe_text(req.subtitle_text)
-
-    # Preset ringan & stabil Railway
+    # SAFE & FAST PRESET
     vf = (
         "scale=1080:1920:force_original_aspect_ratio=increase,"
         "crop=1080:1920,"
-        "eq=contrast=1.05:saturation=1.04:brightness=0.02,"
-        "vignette=PI/5,"
-        f"drawtext=text='{safe_text}':"
-        "fontcolor=white:fontsize=56:"
-        "borderw=2:bordercolor=black:"
-        "x=(w-text_w)/2:y=h*0.72"
-    )
+        "eq=contrast=1.05:saturation=1.05:brightness=0.02,"
+        "drawtext="
+        "text='{text}':"
+        "fontcolor=white:"
+        "fontsize=58:"
+        "borderw=3:"
+        "bordercolor=black:"
+        "x=(w-text_w)/2:"
+        "y=h*0.75"
+    ).format(text=req.subtitle_text.replace(":", "\\:").replace("'", "\\'"))
 
     cmd = [
         "ffmpeg", "-y",
-        "-loglevel", "error",
         "-i", video_path,
         "-i", audio_path,
         "-map", "0:v:0",
@@ -149,7 +131,7 @@ async def render_video(req: RenderRequest):
         "-pix_fmt", "yuv420p",
         "-shortest",
         "-vf", vf,
-        "-af", "highpass=f=120,lowpass=f=12000,volume=1.2",
+        "-af", "volume=1.1",
         output_path
     ]
 
