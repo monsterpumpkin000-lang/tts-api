@@ -1,36 +1,19 @@
 from fastapi import FastAPI
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
-from pathlib import Path
 import uuid, os, subprocess, requests, random
 import edge_tts
 
 app = FastAPI()
 
-# =====================================================
-# GLOBAL DIRECTORIES (PUBLIC ASSETS)
-# =====================================================
-BASE_DIR = Path(__file__).parent
-AUDIO_DIR = BASE_DIR / "public" / "audio"
-VIDEO_DIR = BASE_DIR / "public" / "video"
-
-AUDIO_DIR.mkdir(parents=True, exist_ok=True)
-VIDEO_DIR.mkdir(parents=True, exist_ok=True)
-
-app.mount("/audio", StaticFiles(directory=AUDIO_DIR), name="audio")
-app.mount("/video", StaticFiles(directory=VIDEO_DIR), name="video")
-
-PUBLIC_DOMAIN = os.getenv("RAILWAY_PUBLIC_DOMAIN")
+TMP_DIR = "/tmp"
 
 # =====================================================
 # 1. SCRIPT GENERATOR
 # =====================================================
+
 class ScriptRequest(BaseModel):
     theme: str
-    angle: str
-    core_truth: str
-    emotion: str
     audience: str
 
 @app.post("/generate-script")
@@ -42,115 +25,140 @@ async def generate_script(req: ScriptRequest):
     return {
         "voice_text": f"{hook} {body} {ending}",
         "subtitle_text": f"{hook} {body}",
-        "video_query": "cinematic calm determination",
+        "video_query": "calm determination cinematic"
     }
 
 # =====================================================
-# 2. TEXT TO SPEECH (EDGE TTS → URL)
+# 2. TEXT TO SPEECH (EDGE TTS)
 # =====================================================
+
 class TTSRequest(BaseModel):
     text: str
 
 @app.post("/tts")
 async def tts(req: TTSRequest):
     audio_id = uuid.uuid4().hex
-    audio_path = AUDIO_DIR / f"{audio_id}.mp3"
+    audio_path = f"{TMP_DIR}/{audio_id}.mp3"
 
     communicate = edge_tts.Communicate(
         text=req.text,
         voice="en-US-JennyNeural",
         rate="+10%",
-        pitch="+0Hz",
+        pitch="+0Hz"
     )
-    await communicate.save(str(audio_path))
-
-    words = len(req.text.split())
-    duration = max(3, int(words / 2.3))
+    await communicate.save(audio_path)
 
     return {
-        "audio_url": f"https://{PUBLIC_DOMAIN}/audio/{audio_id}.mp3",
-        "duration": duration,
+        "audio_url": f"/audio/{audio_id}.mp3"
+    }
+
+@app.get("/audio/{file_name}")
+def serve_audio(file_name: str):
+    path = f"{TMP_DIR}/{file_name}"
+    return FileResponse(path, media_type="audio/mpeg")
+
+# =====================================================
+# 3. GET STOCK VIDEO (PEXELS)
+# =====================================================
+
+class StockVideoRequest(BaseModel):
+    query: str
+
+@app.post("/get-stock-video")
+def get_stock_video(req: StockVideoRequest):
+    headers = {
+        "Authorization": os.getenv("PEXELS_API_KEY")
+    }
+
+    url = (
+        "https://api.pexels.com/videos/search"
+        f"?query={req.query}&orientation=portrait&per_page=1"
+    )
+
+    res = requests.get(url, headers=headers, timeout=20)
+    res.raise_for_status()
+
+    data = res.json()
+    video_url = data["videos"][0]["video_files"][0]["link"]
+
+    return {
+        "video_url": video_url
     }
 
 # =====================================================
-# 3. GET STOCK VIDEO (PEXELS + FALLBACK)
+# 4. RENDER VIDEO (FULL CINEMATIC HANDLED HERE)
 # =====================================================
-class StockVideoRequest(BaseModel):
-    query: str
-    fallback_queries: list[str] | None = None
-    duration: int = 30
-    orientation: str = "vertical"
-    platform: str = "youtube_shorts"
 
-@app.post("/get-stock-video")
-async def get_stock_video(req: StockVideoRequest):
-    headers = {"Authorization": os.getenv("PEXELS_API_KEY")}
+class SubtitleStyle(BaseModel):
+    font: str = "Montserrat"
+    size: int = 64
+    color: str = "#FFFFFF"
+    stroke: str = "#000000"
+    stroke_width: int = 3
+    position: str = "bottom"
+    highlight_color: str | None = None
 
-    queries = [req.query] + (req.fallback_queries or [])
+class Subtitles(BaseModel):
+    style: SubtitleStyle
 
-    for q in queries:
-        url = (
-            "https://api.pexels.com/videos/search"
-            f"?query={q}&orientation=portrait&per_page=1"
-        )
-        res = requests.get(url, headers=headers, timeout=15)
-        if res.status_code != 200:
-            continue
+class Editing(BaseModel):
+    cut_on_emphasis: bool = True
+    zoom_on_emphasis: bool = True
+    zoom_scale: float = 1.05
+    fade_in: float = 0.3
+    fade_out: float = 0.3
 
-        data = res.json()
-        if not data.get("videos"):
-            continue
-
-        video_url = data["videos"][0]["video_files"][0]["link"]
-        return {"video_url": video_url}
-
-    return {"video_url": None}
-
-# =====================================================
-# 4. RENDER VIDEO (FFMPEG SHORTS)
-# =====================================================
 class RenderRequest(BaseModel):
     video_url: str
     audio_url: str
     subtitle_text: str
-    duration: int
-    orientation: str = "vertical"
+
     resolution: str = "1080x1920"
+    subtitles: Subtitles | None = None
+    editing: Editing | None = None
 
 @app.post("/render-video")
-async def render_video(req: RenderRequest):
-    video_path = VIDEO_DIR / f"{uuid.uuid4()}.mp4"
-    audio_path = AUDIO_DIR / f"{uuid.uuid4()}.mp3"
-    output_path = VIDEO_DIR / f"{uuid.uuid4()}.mp4"
+def render_video(req: RenderRequest):
 
-    open(video_path, "wb").write(requests.get(req.video_url).content)
-    open(audio_path, "wb").write(requests.get(req.audio_url).content)
+    video_path = f"{TMP_DIR}/{uuid.uuid4()}.mp4"
+    audio_path = f"{TMP_DIR}/{uuid.uuid4()}.mp3"
+    output_path = f"{TMP_DIR}/{uuid.uuid4()}.mp4"
 
+    # Download assets
+    open(video_path, "wb").write(requests.get(req.video_url, timeout=30).content)
+    open(audio_path, "wb").write(requests.get(req.audio_url, timeout=30).content)
+
+    # Cinematic presets
     presets = [
         {"zoom": "0.0006", "contrast": "1.03", "noise": "6"},
-        {"zoom": "0.0010", "contrast": "1.07", "noise": "10"},
-        {"zoom": "0.0014", "contrast": "1.1", "noise": "14"},
+        {"zoom": "0.0009", "contrast": "1.06", "noise": "10"},
+        {"zoom": "0.0012", "contrast": "1.1", "noise": "14"},
     ]
     p = random.choice(presets)
+
+    style = req.subtitles.style if req.subtitles else SubtitleStyle()
+    edit = req.editing if req.editing else Editing()
+
+    y_pos = "h*0.72" if style.position == "bottom" else "h*0.15"
 
     vf = (
         "scale=1080:1920:force_original_aspect_ratio=increase,"
         "crop=1080:1920,"
-        f"zoompan=z='min(zoom+{p['zoom']},1.05)':"
+        f"zoompan=z='min(zoom+{p['zoom']},1.1)':"
         "x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=1080x1920,"
         f"eq=contrast={p['contrast']}:saturation=1.05:brightness=0.02,"
         f"noise=alls={p['noise']}:allf=t,"
         "vignette=PI/4,"
         f"drawtext=text='{req.subtitle_text}':"
-        "fontcolor=white:fontsize=64:line_spacing=10:"
-        "borderw=3:bordercolor=black:"
-        "x=(w-text_w)/2:y=h*0.72"
+        f"fontcolor={style.color}:fontsize={style.size}:"
+        f"borderw={style.stroke_width}:bordercolor={style.stroke}:"
+        f"x=(w-text_w)/2:y={y_pos}"
     )
 
     cmd = [
         "ffmpeg", "-y",
-        "-i", str(video_path),
-        "-i", str(audio_path),
+        "-i", video_path,
+        "-i", audio_path,
         "-map", "0:v:0",
         "-map", "1:a:0",
         "-c:v", "libx264",
@@ -159,11 +167,13 @@ async def render_video(req: RenderRequest):
         "-shortest",
         "-vf", vf,
         "-af", "highpass=f=120,lowpass=f=12000,volume=1.2",
-        str(output_path),
+        output_path
     ]
 
     subprocess.run(cmd, check=True)
 
-    return {
-        "rendered_video_url": f"https://{PUBLIC_DOMAIN}/video/{output_path.name}"
-    }
+    return FileResponse(
+        output_path,
+        media_type="video/mp4",
+        filename="shorts.mp4"
+    )
