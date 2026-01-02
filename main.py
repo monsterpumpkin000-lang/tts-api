@@ -70,8 +70,6 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import uuid, subprocess, requests, os
 
-app = FastAPI()
-
 class RenderRequest(BaseModel):
     image_url: str
     audio_url: str
