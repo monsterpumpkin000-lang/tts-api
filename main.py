@@ -1,8 +1,7 @@
 from fastapi import FastAPI
-from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-import uuid, os, subprocess, requests, random, math
+import uuid, os, subprocess, requests, math
 import edge_tts
 
 # =====================================================
@@ -10,11 +9,7 @@ import edge_tts
 # =====================================================
 app = FastAPI()
 
-raw_base = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").rstrip("/")
-if raw_base and not raw_base.startswith("http"):
-    BASE_URL = f"https://{raw_base}"
-else:
-    BASE_URL = raw_base
+BASE_URL = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").rstrip("/")
 AUDIO_DIR = "audio"
 VIDEO_DIR = "output"
 
@@ -44,7 +39,7 @@ async def generate_script(req: ScriptRequest):
     }
 
 # =====================================================
-# 2. TEXT TO SPEECH (RETURN URL, NOT BINARY)
+# 2. TEXT TO SPEECH (RETURN URL)
 # =====================================================
 class TTSRequest(BaseModel):
     text: str
@@ -57,13 +52,13 @@ async def tts(req: TTSRequest):
     communicate = edge_tts.Communicate(
         text=req.text,
         voice="en-US-JennyNeural",
-        rate="+10%",
+        rate="+8%",
         pitch="+0Hz"
     )
     await communicate.save(path)
 
     words = len(req.text.split())
-    duration = max(3, math.ceil(words * 0.45))
+    duration = max(4, math.ceil(words * 0.45))
 
     return {
         "audio_url": f"{BASE_URL}/audio/{filename}",
@@ -96,7 +91,7 @@ async def get_stock_video(req: StockVideoRequest):
     return {"video_url": video_url}
 
 # =====================================================
-# 4. RENDER VIDEO (ALL EDITING DONE HERE)
+# 4. RENDER VIDEO (LIGHT PRESET – STABLE)
 # =====================================================
 class RenderRequest(BaseModel):
     video_url: str
@@ -110,26 +105,20 @@ async def render_video(req: RenderRequest):
     output_file = f"{uuid.uuid4().hex}.mp4"
     output_path = os.path.join(VIDEO_DIR, output_file)
 
-    open(video_path, "wb").write(requests.get(req.video_url).content)
-    open(audio_path, "wb").write(requests.get(req.audio_url).content)
+    # download assets
+    open(video_path, "wb").write(requests.get(req.video_url, timeout=30).content)
+    open(audio_path, "wb").write(requests.get(req.audio_url, timeout=30).content)
 
-    presets = [
-        {"zoom": "0.0006", "contrast": "1.03", "noise": "6"},
-        {"zoom": "0.0009", "contrast": "1.06", "noise": "10"},
-        {"zoom": "0.0012", "contrast": "1.1", "noise": "14"},
-    ]
-    p = random.choice(presets)
-
+    # 🔽 LIGHT & STABLE FILTER (NO ZOOMPAN, NO NOISE)
     vf = (
-    "scale=1080:1920:force_original_aspect_ratio=increase,"
-    "crop=1080:1920,"
-    "eq=contrast=1.05:saturation=1.03:brightness=0.02,"
-    "vignette=PI/5,"
-    f"drawtext=text='{req.subtitle_text}':"
-    "fontcolor=white:fontsize=56:borderw=2:bordercolor=black:"
-    "x=(w-text_w)/2:y=h*0.72"
-    )
-
+        "scale=1080:1920:force_original_aspect_ratio=increase,"
+        "crop=1080:1920,"
+        "eq=contrast=1.05:saturation=1.04:brightness=0.02,"
+        "vignette=PI/5,"
+        f"drawtext=text='{req.subtitle_text}':"
+        "fontcolor=white:fontsize=56:"
+        "borderw=2:bordercolor=black:"
+        "x=(w-text_w)/2:y=h*0.72"
     )
 
     cmd = [
@@ -139,11 +128,11 @@ async def render_video(req: RenderRequest):
         "-map", "0:v:0",
         "-map", "1:a:0",
         "-c:v", "libx264",
-        "-preset", "ultrafast",
+        "-preset", "ultrafast",  
         "-pix_fmt", "yuv420p",
         "-shortest",
         "-vf", vf,
-        "-af", "highpass=f=120,lowpass=f=12000,volume=1.2",
+        "-af", "volume=1.15",
         output_path
     ]
 
