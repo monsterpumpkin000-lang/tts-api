@@ -12,5 +12,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# IMPORTANT: use SHELL form so $PORT expands
-CMD uvicorn main:app --host 0.0.0.0 --port ${PORT}
+# ⬇⬇⬇ INI BAGIAN PALING PENTING ⬇⬇⬇
+CMD uvicorn main:app --host 0.0.0.0 --port $PORT
