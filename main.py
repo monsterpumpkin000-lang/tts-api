@@ -121,17 +121,15 @@ async def render_video(req: RenderRequest):
     p = random.choice(presets)
 
     vf = (
-        "scale=1080:1920:force_original_aspect_ratio=increase,"
-        "crop=1080:1920,"
-        f"zoompan=z='min(zoom+{p['zoom']},1.05)':"
-        "x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=1080x1920,"
-        f"eq=contrast={p['contrast']}:saturation=1.05:brightness=0.02,"
-        f"noise=alls={p['noise']}:allf=t,"
-        "vignette=PI/4,"
-        f"drawtext=text='{req.subtitle_text}':"
-        "fontcolor=white:fontsize=64:"
-        "borderw=3:bordercolor=black:"
-        "x=(w-text_w)/2:y=h*0.72"
+    "scale=1080:1920:force_original_aspect_ratio=increase,"
+    "crop=1080:1920,"
+    "eq=contrast=1.05:saturation=1.03:brightness=0.02,"
+    "vignette=PI/5,"
+    f"drawtext=text='{req.subtitle_text}':"
+    "fontcolor=white:fontsize=56:borderw=2:bordercolor=black:"
+    "x=(w-text_w)/2:y=h*0.72"
+    )
+
     )
 
     cmd = [
@@ -141,7 +139,7 @@ async def render_video(req: RenderRequest):
         "-map", "0:v:0",
         "-map", "1:a:0",
         "-c:v", "libx264",
-        "-preset", "veryfast",
+        "-preset", "ultrafast",
         "-pix_fmt", "yuv420p",
         "-shortest",
         "-vf", vf,
