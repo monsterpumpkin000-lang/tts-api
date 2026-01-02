@@ -1,6 +1,6 @@
-fastapi
-uvicorn
-openai
+fastapi>=0.110
+uvicorn>=0.27
+pydantic>=2.0
 requests
 edge-tts
 python-multipart
