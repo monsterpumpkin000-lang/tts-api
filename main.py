@@ -10,7 +10,11 @@ import edge_tts
 # =====================================================
 app = FastAPI()
 
-BASE_URL = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").rstrip("/")
+raw_base = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").rstrip("/")
+if raw_base and not raw_base.startswith("http"):
+    BASE_URL = f"https://{raw_base}"
+else:
+    BASE_URL = raw_base
 AUDIO_DIR = "audio"
 VIDEO_DIR = "output"
 
