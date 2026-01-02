@@ -120,28 +120,44 @@ class ImageRequest(BaseModel):
 # IMAGE GENERATOR (OPENAI)
 # ============================
 
+from pydantic import BaseModel
 from openai import OpenAI
-import base64
+import requests, uuid, os
+from fastapi.responses import FileResponse
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+class ImageRequest(BaseModel):
+    theme: str
+    mood: str = "calm"
+    style: str = "minimal cinematic"
+
 @app.post("/generate-image")
 async def generate_image(req: ImageRequest):
+    prompt = f"""
+    Vertical cinematic background image.
+    Theme: {req.theme}
+    Mood: {req.mood}
+    Style: {req.style}
+    No text, no watermark, no logo.
+    Resolution: 1080x1920
+    """
+
     result = client.images.generate(
         model="gpt-image-1",
-        prompt=req.prompt,
+        prompt=prompt,
         size="1080x1920"
     )
 
-    image_base64 = result.data[0].b64_json
-    image_bytes = base64.b64decode(image_base64)
+    image_url = result.data[0].url
+    image_bytes = requests.get(image_url).content
 
     filename = f"/tmp/{uuid.uuid4()}.png"
     with open(filename, "wb") as f:
         f.write(image_bytes)
 
     return FileResponse(
-        path=filename,
+        filename,
         media_type="image/png",
         filename="background.png"
     )
