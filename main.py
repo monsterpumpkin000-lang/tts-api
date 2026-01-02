@@ -98,26 +98,17 @@ async def render_video(req: RenderRequest):
         f.write(aud.content)
 
     cmd = [
-        "ffmpeg", "-y",
-        "-loop", "1", "-i", image_path,
-        "-i", audio_path,
-        "-c:v", "libx264",
-        "-preset", "veryfast",
-        "-tune", "stillimage",
-        "-pix_fmt", "yuv420p",
-        "-c:a", "aac",
-        "-shortest",
-        "-vf",
-        "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
-        output_path
-    ]
+       ffmpeg -y \
+-i video.mp4 \
+-i voice.mp3 \
+-map 0:v:0 -map 1:a:0 \
+-c:v libx264 \
+-preset veryfast \
+-pix_fmt yuv420p \
+-shortest \
+-vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920" \
+shorts.mp4
 
-    subprocess.run(cmd, check=True)
-
-    return FileResponse(
-        output_path,
-        media_type="video/mp4",
-        filename="shorts.mp4"
     )
 
 class ImageRequest(BaseModel):
