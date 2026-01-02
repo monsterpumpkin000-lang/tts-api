@@ -65,20 +65,32 @@ async def generate_script(req: ScriptRequest):
 # =========================
 # RENDER VIDEO (FFMPEG)
 # =========================
+from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
+import uuid, subprocess, requests, os
+
+app = FastAPI()
+
+class RenderRequest(BaseModel):
+    image_url: str
+    audio_url: str
+
 @app.post("/render-video")
-async def render_video(
-    image: UploadFile = File(...),
-    audio: UploadFile = File(...)
-):
-    image_path = f"/tmp/{uuid.uuid4()}.png"
+async def render_video(req: RenderRequest):
+    image_path = f"/tmp/{uuid.uuid4()}.jpg"
     audio_path = f"/tmp/{uuid.uuid4()}.mp3"
     output_path = f"/tmp/{uuid.uuid4()}.mp4"
 
+    # download image
+    img = requests.get(req.image_url)
     with open(image_path, "wb") as f:
-        f.write(await image.read())
+        f.write(img.content)
 
+    # download audio
+    aud = requests.get(req.audio_url)
     with open(audio_path, "wb") as f:
-        f.write(await audio.read())
+        f.write(aud.content)
 
     cmd = [
         "ffmpeg", "-y",
