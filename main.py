@@ -133,8 +133,6 @@ class ImageRequest(BaseModel):
 
 @app.post("/generate-image")
 async def generate_image(req: ImageRequest):
-    api_key = os.getenv("OPENAI_API_KEY")
-
     prompt = f"""
     Vertical cinematic background image.
     Theme: {req.theme}
@@ -144,27 +142,19 @@ async def generate_image(req: ImageRequest):
     Resolution: 1080x1920
     """
 
-    response = requests.post(
-        "https://api.openai.com/v1/images/generations",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        },
-        json={
-            "model": "gpt-image-1",
-            "prompt": prompt,
-            "size": "1080x1920"
-        },
-        timeout=60
-    )
+    try:
+        result = client.images.generate(
+            model="gpt-image-1",
+            prompt=prompt,
+            size="1080x1920"
+        )
+    except Exception as e:
+        return {
+            "error": "openai_exception",
+            "detail": str(e)
+        }
 
-    if response.status_code != 200:
-    return {
-        "openai_status": response.status_code,
-        "openai_error": response.text
-    }
-
-    image_url = response.json()["data"][0]["url"]
+    image_url = result.data[0].url
     image_bytes = requests.get(image_url).content
 
     filename = f"/tmp/{uuid.uuid4()}.png"
@@ -172,7 +162,7 @@ async def generate_image(req: ImageRequest):
         f.write(image_bytes)
 
     return FileResponse(
-        filename,
+        path=filename,
         media_type="image/png",
         filename="background.png"
     )
