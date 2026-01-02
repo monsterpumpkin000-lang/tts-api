@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-import uuid, os, subprocess, requests, math
+import uuid, os, subprocess, requests, random, math
 import edge_tts
 
 # =====================================================
@@ -18,6 +18,20 @@ os.makedirs(VIDEO_DIR, exist_ok=True)
 
 app.mount("/audio", StaticFiles(directory=AUDIO_DIR), name="audio")
 app.mount("/output", StaticFiles(directory=VIDEO_DIR), name="output")
+
+# =====================================================
+# UTILS
+# =====================================================
+def ffmpeg_safe_text(text: str) -> str:
+    """Escape text supaya drawtext tidak crash"""
+    return (
+        text
+        .replace("\\", "\\\\")
+        .replace(":", "\\:")
+        .replace("'", "\\'")
+        .replace('"', '\\"')
+        .replace("\n", " ")
+    )
 
 # =====================================================
 # 1. SCRIPT GENERATOR
@@ -91,7 +105,7 @@ async def get_stock_video(req: StockVideoRequest):
     return {"video_url": video_url}
 
 # =====================================================
-# 4. RENDER VIDEO (LIGHT PRESET – STABLE)
+# 4. RENDER VIDEO (ALL EDITING HERE)
 # =====================================================
 class RenderRequest(BaseModel):
     video_url: str
@@ -105,17 +119,19 @@ async def render_video(req: RenderRequest):
     output_file = f"{uuid.uuid4().hex}.mp4"
     output_path = os.path.join(VIDEO_DIR, output_file)
 
-    # download assets
+    # Download assets (URL WAJIB full https)
     open(video_path, "wb").write(requests.get(req.video_url, timeout=30).content)
     open(audio_path, "wb").write(requests.get(req.audio_url, timeout=30).content)
 
-    # 🔽 LIGHT & STABLE FILTER (NO ZOOMPAN, NO NOISE)
+    safe_text = ffmpeg_safe_text(req.subtitle_text)
+
+    # Preset ringan & stabil Railway
     vf = (
         "scale=1080:1920:force_original_aspect_ratio=increase,"
         "crop=1080:1920,"
         "eq=contrast=1.05:saturation=1.04:brightness=0.02,"
         "vignette=PI/5,"
-        f"drawtext=text='{req.subtitle_text}':"
+        f"drawtext=text='{safe_text}':"
         "fontcolor=white:fontsize=56:"
         "borderw=2:bordercolor=black:"
         "x=(w-text_w)/2:y=h*0.72"
@@ -123,16 +139,17 @@ async def render_video(req: RenderRequest):
 
     cmd = [
         "ffmpeg", "-y",
+        "-loglevel", "error",
         "-i", video_path,
         "-i", audio_path,
         "-map", "0:v:0",
         "-map", "1:a:0",
         "-c:v", "libx264",
-        "-preset", "ultrafast",  
+        "-preset", "veryfast",
         "-pix_fmt", "yuv420p",
         "-shortest",
         "-vf", vf,
-        "-af", "volume=1.15",
+        "-af", "highpass=f=120,lowpass=f=12000,volume=1.2",
         output_path
     ]
 
