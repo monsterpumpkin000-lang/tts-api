@@ -1,19 +1,10 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-import uuid
+import uuid, os, subprocess, requests
 import edge_tts
-import subprocess
-import os
 
 app = FastAPI()
-
-from openai import OpenAI
-
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
-client = OpenAI(api_key=OPENAI_API_KEY)
-
 
 # =========================
 # TTS
@@ -26,7 +17,7 @@ class TTSRequest(BaseModel):
 
 @app.post("/tts")
 async def tts(req: TTSRequest):
-    filename = f"/tmp/{uuid.uuid4()}.mp3"
+    audio_path = f"/tmp/{uuid.uuid4()}.mp3"
 
     communicate = edge_tts.Communicate(
         text=req.text,
@@ -34,14 +25,9 @@ async def tts(req: TTSRequest):
         rate=req.rate,
         pitch=req.pitch
     )
+    await communicate.save(audio_path)
 
-    await communicate.save(filename)
-
-    return FileResponse(
-        path=filename,
-        media_type="audio/mpeg",
-        filename="voice.mp3"
-    )
+    return FileResponse(audio_path, media_type="audio/mpeg", filename="voice.mp3")
 
 # =========================
 # SCRIPT GENERATOR
@@ -49,141 +35,64 @@ async def tts(req: TTSRequest):
 class ScriptRequest(BaseModel):
     theme: str
     audience: str
-    duration_sec: int = 30
 
 @app.post("/generate-script")
 async def generate_script(req: ScriptRequest):
     hook = "Small daily habits fuel the unshakeable confidence you crave."
-    body = (
-        "Consistent practice in everyday situations gradually strengthens "
-        "confidence without pressure."
-    )
-    ending = "Small actions lead to bigger change."
-
-    voice_over = f"{hook}\n\n{body}\n\n{ending}"
+    body = "Consistency builds confidence faster than motivation ever will."
+    ending = "Start small. Stay consistent."
 
     return {
-        "hook": hook,
-        "body": body,
-        "ending": ending,
-        "voiceOverText": voice_over
+        "voiceOverText": f"{hook} {body} {ending}",
+        "theme": req.theme
     }
 
 # =========================
-# RENDER VIDEO (FFMPEG)
+# PEXELS STOCK VIDEO
 # =========================
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
-from pydantic import BaseModel
-import uuid, subprocess, requests, os
-
-class RenderRequest(BaseModel):
-    image_url: str
-    audio_url: str
-
-@app.post("/render-video")
-async def render_video(req: RenderRequest):
-    image_path = f"/tmp/{uuid.uuid4()}.jpg"
-    audio_path = f"/tmp/{uuid.uuid4()}.mp3"
-    output_path = f"/tmp/{uuid.uuid4()}.mp4"
-
-    # download image
-    img = requests.get(req.image_url)
-    with open(image_path, "wb") as f:
-        f.write(img.content)
-
-    # download audio
-    aud = requests.get(req.audio_url)
-    with open(audio_path, "wb") as f:
-        f.write(aud.content)
-
-    cmd = [
-       ffmpeg -y \
--i video.mp4 \
--i voice.mp3 \
--map 0:v:0 -map 1:a:0 \
--c:v libx264 \
--preset veryfast \
--pix_fmt yuv420p \
--shortest \
--vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920" \
-shorts.mp4
-
-    )
-
-class ImageRequest(BaseModel):
-    prompt: str
-
-# ============================
-# IMAGE GENERATOR (OPENAI - REST)
-# ============================
-
-import requests
-import uuid
-import os
-from fastapi.responses import FileResponse
-from pydantic import BaseModel
-
-class ImageRequest(BaseModel):
-    theme: str
-    mood: str = "calm"
-    style: str = "minimal cinematic"
-
-@app.post("/generate-image")
-async def generate_image(req: ImageRequest):
-    prompt = f"""
-    Vertical cinematic background image.
-    Theme: {req.theme}
-    Mood: {req.mood}
-    Style: {req.style}
-    No text, no watermark, no logo.
-    Resolution: 1080x1920
-    """
-
-    try:
-        result = client.images.generate(
-            model="gpt-image-1",
-            prompt=prompt,
-            size="1024x1536"
-        )
-    except Exception as e:
-        return {
-            "error": "openai_exception",
-            "detail": str(e)
-        }
-
-    image_url = result.data[0].url
-    image_bytes = requests.get(image_url).content
-
-    filename = f"/tmp/{uuid.uuid4()}.png"
-    with open(filename, "wb") as f:
-        f.write(image_bytes)
-
-    return FileResponse(
-        path=filename,
-        media_type="image/png",
-        filename="background.png"
-    )
-
-# =========================
-# PEXEL STOCK
-# =========================
-
 class StockVideoRequest(BaseModel):
     query: str
 
 @app.post("/get-stock-video")
 async def get_stock_video(req: StockVideoRequest):
-    headers = {
-        "Authorization": os.getenv("PEXELS_API_KEY")
-    }
-
+    headers = {"Authorization": os.getenv("PEXELS_API_KEY")}
     url = f"https://api.pexels.com/videos/search?query={req.query}&orientation=portrait&per_page=1"
 
     res = requests.get(url, headers=headers).json()
-
     video_url = res["videos"][0]["video_files"][0]["link"]
 
-    return {
-        "video_url": video_url
-    }
+    return {"video_url": video_url}
+
+# =========================
+# RENDER VIDEO (FFMPEG)
+# =========================
+class RenderRequest(BaseModel):
+    video_url: str
+    audio_url: str
+
+@app.post("/render-video")
+async def render_video(req: RenderRequest):
+    video_path = f"/tmp/{uuid.uuid4()}.mp4"
+    audio_path = f"/tmp/{uuid.uuid4()}.mp3"
+    output_path = f"/tmp/{uuid.uuid4()}.mp4"
+
+    open(video_path, "wb").write(requests.get(req.video_url).content)
+    open(audio_path, "wb").write(requests.get(req.audio_url).content)
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", video_path,
+        "-i", audio_path,
+        "-map", "0:v:0",
+        "-map", "1:a:0",
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-pix_fmt", "yuv420p",
+        "-shortest",
+        "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
+        output_path
+    ]
+
+    subprocess.run(cmd, check=True)
+
+    return FileResponse(output_path, media_type="video/mp4", filename="shorts.mp4")
