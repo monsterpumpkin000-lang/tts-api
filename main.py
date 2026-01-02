@@ -173,3 +173,26 @@ async def generate_image(req: ImageRequest):
         media_type="image/png",
         filename="background.png"
     )
+
+# =========================
+# PEXEL STOCK
+# =========================
+
+class StockVideoRequest(BaseModel):
+    query: str
+
+@app.post("/get-stock-video")
+async def get_stock_video(req: StockVideoRequest):
+    headers = {
+        "Authorization": os.getenv("PEXELS_API_KEY")
+    }
+
+    url = f"https://api.pexels.com/videos/search?query={req.query}&orientation=portrait&per_page=1"
+
+    res = requests.get(url, headers=headers).json()
+
+    video_url = res["videos"][0]["video_files"][0]["link"]
+
+    return {
+        "video_url": video_url
+    }
