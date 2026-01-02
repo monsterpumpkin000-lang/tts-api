@@ -159,7 +159,10 @@ async def generate_image(req: ImageRequest):
     )
 
     if response.status_code != 200:
-        raise Exception(response.text)
+    return {
+        "openai_status": response.status_code,
+        "openai_error": response.text
+    }
 
     image_url = response.json()["data"][0]["url"]
     image_bytes = requests.get(image_url).content
