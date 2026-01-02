@@ -153,7 +153,7 @@ async def generate_image(req: ImageRequest):
         result = client.images.generate(
             model="gpt-image-1",
             prompt=prompt,
-            size="1080x1920"
+            size="1024x1536"
         )
     except Exception as e:
         return {
