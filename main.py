@@ -112,3 +112,45 @@ async def render_video(req: RenderRequest):
         media_type="video/mp4",
         filename="shorts.mp4"
     )
+
+
+# ============================
+# IMAGE RENDER (OPENAI)
+# ============================
+from openai import OpenAI
+from fastapi.responses import FileResponse
+import requests
+import os
+
+client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+
+@app.post("/generate-image")
+async def generate_image(req: ScriptRequest):
+    prompt = f"""
+    Cinematic vertical background image.
+    Theme: {req.theme}
+    Mood: calm, minimalist, aesthetic
+    Style: abstract, soft light, modern
+    No text, no watermark, no logo.
+    Resolution: 1080x1920
+    """
+
+    result = client.images.generate(
+        model="gpt-image-1",
+        prompt=prompt,
+        size="1080x1920"
+    )
+
+    image_url = result.data[0].url
+
+    image_bytes = requests.get(image_url).content
+    filename = f"/tmp/{uuid.uuid4()}.png"
+
+    with open(filename, "wb") as f:
+        f.write(image_bytes)
+
+    return FileResponse(
+        path=filename,
+        media_type="image/png",
+        filename="background.png"
+    )
