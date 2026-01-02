@@ -121,9 +121,11 @@ from openai import OpenAI
 from fastapi.responses import FileResponse
 import requests
 import os
+from openai import OpenAI
 
-client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-
+client = OpenAI(
+    api_key=os.getenv("proj-bvLq5PvbrJMlZOpSMjxdF2SW1EjAY0ov-NHCLCkG7Le2jPqGaZxMzJ82WsEkA9JFletU6UMhzcT3BlbkFJgFrHcp30c5SPbvgjIcO8JUARJ3DhnxdqG3WCtpOCfwAWW9s2FEuTvfJCrTnb5u2dkv8kwXYAgA")
+)
 @app.post("/generate-image")
 async def generate_image(req: ScriptRequest):
     prompt = f"""
