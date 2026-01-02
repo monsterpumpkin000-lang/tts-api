@@ -113,41 +113,30 @@ async def render_video(req: RenderRequest):
         filename="shorts.mp4"
     )
 
+class ImageRequest(BaseModel):
+    prompt: str
 
 # ============================
-# IMAGE RENDER (OPENAI)
+# IMAGE GENERATOR (OPENAI)
 # ============================
-from openai import OpenAI
-from fastapi.responses import FileResponse
-import requests
-import os
-from openai import OpenAI
 
-client = OpenAI(
-    api_key=os.getenv("proj-bvLq5PvbrJMlZOpSMjxdF2SW1EjAY0ov-NHCLCkG7Le2jPqGaZxMzJ82WsEkA9JFletU6UMhzcT3BlbkFJgFrHcp30c5SPbvgjIcO8JUARJ3DhnxdqG3WCtpOCfwAWW9s2FEuTvfJCrTnb5u2dkv8kwXYAgA")
-)
+from openai import OpenAI
+import base64
+
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
 @app.post("/generate-image")
-async def generate_image(req: ScriptRequest):
-    prompt = f"""
-    Cinematic vertical background image.
-    Theme: {req.theme}
-    Mood: calm, minimalist, aesthetic
-    Style: abstract, soft light, modern
-    No text, no watermark, no logo.
-    Resolution: 1080x1920
-    """
-
+async def generate_image(req: ImageRequest):
     result = client.images.generate(
         model="gpt-image-1",
-        prompt=prompt,
+        prompt=req.prompt,
         size="1080x1920"
     )
 
-    image_url = result.data[0].url
+    image_base64 = result.data[0].b64_json
+    image_bytes = base64.b64decode(image_base64)
 
-    image_bytes = requests.get(image_url).content
     filename = f"/tmp/{uuid.uuid4()}.png"
-
     with open(filename, "wb") as f:
         f.write(image_bytes)
 
