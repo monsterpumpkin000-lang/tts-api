@@ -1,16 +1,36 @@
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from pathlib import Path
 import uuid, os, subprocess, requests, random
 import edge_tts
 
 app = FastAPI()
 
 # =====================================================
+# GLOBAL DIRECTORIES (PUBLIC ASSETS)
+# =====================================================
+BASE_DIR = Path(__file__).parent
+AUDIO_DIR = BASE_DIR / "public" / "audio"
+VIDEO_DIR = BASE_DIR / "public" / "video"
+
+AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+VIDEO_DIR.mkdir(parents=True, exist_ok=True)
+
+app.mount("/audio", StaticFiles(directory=AUDIO_DIR), name="audio")
+app.mount("/video", StaticFiles(directory=VIDEO_DIR), name="video")
+
+PUBLIC_DOMAIN = os.getenv("RAILWAY_PUBLIC_DOMAIN")
+
+# =====================================================
 # 1. SCRIPT GENERATOR
 # =====================================================
 class ScriptRequest(BaseModel):
     theme: str
+    angle: str
+    core_truth: str
+    emotion: str
     audience: str
 
 @app.post("/generate-script")
@@ -19,88 +39,97 @@ async def generate_script(req: ScriptRequest):
     body = "Consistency beats motivation when motivation fades."
     ending = "Start today. Stay consistent."
 
-    subtitle = f"{hook} {body}"
-
     return {
         "voice_text": f"{hook} {body} {ending}",
-        "subtitle_text": subtitle,
-        "video_query": "cinematic calm nature"
+        "subtitle_text": f"{hook} {body}",
+        "video_query": "cinematic calm determination",
     }
 
 # =====================================================
-# 2. TEXT TO SPEECH (EDGE TTS)
+# 2. TEXT TO SPEECH (EDGE TTS → URL)
 # =====================================================
 class TTSRequest(BaseModel):
     text: str
 
 @app.post("/tts")
 async def tts(req: TTSRequest):
-    audio_path = f"/tmp/{uuid.uuid4()}.mp3"
+    audio_id = uuid.uuid4().hex
+    audio_path = AUDIO_DIR / f"{audio_id}.mp3"
 
     communicate = edge_tts.Communicate(
         text=req.text,
         voice="en-US-JennyNeural",
         rate="+10%",
-        pitch="+0Hz"
+        pitch="+0Hz",
     )
-    await communicate.save(audio_path)
+    await communicate.save(str(audio_path))
 
-    return FileResponse(
-        audio_path,
-        media_type="audio/mpeg",
-        filename="voice.mp3"
-    )
+    words = len(req.text.split())
+    duration = max(3, int(words / 2.3))
+
+    return {
+        "audio_url": f"https://{PUBLIC_DOMAIN}/audio/{audio_id}.mp3",
+        "duration": duration,
+    }
 
 # =====================================================
-# 3. GET STOCK VIDEO (PEXELS)
+# 3. GET STOCK VIDEO (PEXELS + FALLBACK)
 # =====================================================
 class StockVideoRequest(BaseModel):
     query: str
+    fallback_queries: list[str] | None = None
+    duration: int = 30
+    orientation: str = "vertical"
+    platform: str = "youtube_shorts"
 
 @app.post("/get-stock-video")
 async def get_stock_video(req: StockVideoRequest):
-    headers = {
-        "Authorization": os.getenv("PEXELS_API_KEY")
-    }
+    headers = {"Authorization": os.getenv("PEXELS_API_KEY")}
 
-    url = (
-        "https://api.pexels.com/videos/search"
-        f"?query={req.query}&orientation=portrait&per_page=1"
-    )
+    queries = [req.query] + (req.fallback_queries or [])
 
-    res = requests.get(url, headers=headers, timeout=15)
-    res.raise_for_status()
+    for q in queries:
+        url = (
+            "https://api.pexels.com/videos/search"
+            f"?query={q}&orientation=portrait&per_page=1"
+        )
+        res = requests.get(url, headers=headers, timeout=15)
+        if res.status_code != 200:
+            continue
 
-    data = res.json()
-    video_url = data["videos"][0]["video_files"][0]["link"]
+        data = res.json()
+        if not data.get("videos"):
+            continue
 
-    return {
-        "video_url": video_url
-    }
+        video_url = data["videos"][0]["video_files"][0]["link"]
+        return {"video_url": video_url}
+
+    return {"video_url": None}
 
 # =====================================================
-# 4. RENDER VIDEO (FFMPEG + CINEMATIC + SUBTITLE)
+# 4. RENDER VIDEO (FFMPEG SHORTS)
 # =====================================================
 class RenderRequest(BaseModel):
     video_url: str
     audio_url: str
     subtitle_text: str
+    duration: int
+    orientation: str = "vertical"
+    resolution: str = "1080x1920"
 
 @app.post("/render-video")
 async def render_video(req: RenderRequest):
-    video_path = f"/tmp/{uuid.uuid4()}.mp4"
-    audio_path = f"/tmp/{uuid.uuid4()}.mp3"
-    output_path = f"/tmp/{uuid.uuid4()}.mp4"
+    video_path = VIDEO_DIR / f"{uuid.uuid4()}.mp4"
+    audio_path = AUDIO_DIR / f"{uuid.uuid4()}.mp3"
+    output_path = VIDEO_DIR / f"{uuid.uuid4()}.mp4"
 
-    # download assets
     open(video_path, "wb").write(requests.get(req.video_url).content)
     open(audio_path, "wb").write(requests.get(req.audio_url).content)
 
-    # random cinematic presets
     presets = [
         {"zoom": "0.0006", "contrast": "1.03", "noise": "6"},
-        {"zoom": "0.0008", "contrast": "1.05", "noise": "10"},
-        {"zoom": "0.0012", "contrast": "1.1", "noise": "14"},
+        {"zoom": "0.0010", "contrast": "1.07", "noise": "10"},
+        {"zoom": "0.0014", "contrast": "1.1", "noise": "14"},
     ]
     p = random.choice(presets)
 
@@ -120,8 +149,8 @@ async def render_video(req: RenderRequest):
 
     cmd = [
         "ffmpeg", "-y",
-        "-i", video_path,
-        "-i", audio_path,
+        "-i", str(video_path),
+        "-i", str(audio_path),
         "-map", "0:v:0",
         "-map", "1:a:0",
         "-c:v", "libx264",
@@ -130,13 +159,11 @@ async def render_video(req: RenderRequest):
         "-shortest",
         "-vf", vf,
         "-af", "highpass=f=120,lowpass=f=12000,volume=1.2",
-        output_path
+        str(output_path),
     ]
 
     subprocess.run(cmd, check=True)
 
-    return FileResponse(
-        output_path,
-        media_type="video/mp4",
-        filename="shorts.mp4"
-    )
+    return {
+        "rendered_video_url": f"https://{PUBLIC_DOMAIN}/video/{output_path.name}"
+    }
