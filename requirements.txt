@@ -1,6 +1,5 @@
-openai
-requests
 fastapi
 uvicorn
+requests
 edge-tts
 python-multipart
