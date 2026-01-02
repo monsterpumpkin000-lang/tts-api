@@ -68,10 +68,15 @@ async def get_stock_video(req: StockVideoRequest):
         f"?query={req.query}&orientation=portrait&per_page=1"
     )
 
-    res = requests.get(url, headers=headers, timeout=20).json()
-    video_url = res["videos"][0]["video_files"][0]["link"]
+    res = requests.get(url, headers=headers, timeout=15)
+    res.raise_for_status()
 
-    return {"video_url": video_url}
+    data = res.json()
+    video_url = data["videos"][0]["video_files"][0]["link"]
+
+    return {
+        "video_url": video_url
+    }
 
 # =====================================================
 # 4. RENDER VIDEO (FFMPEG + CINEMATIC + SUBTITLE)
