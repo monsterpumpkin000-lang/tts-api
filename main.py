@@ -79,8 +79,11 @@ async def get_stock_video(req: StockVideoRequest):
 
 
 # =========================
-# 4. RENDER VIDEO (SAFE)
+# 4. RENDER VIDEO (FIXED & SAFE)
 # =========================
+import logging
+logging.basicConfig(level=logging.INFO)
+
 class RenderRequest(BaseModel):
     video_url: str
     audio_url: str
@@ -92,21 +95,63 @@ async def render_video(req: RenderRequest):
     audio_path = f"/tmp/{uuid.uuid4().hex}.mp3"
     output_path = os.path.join(VIDEO_DIR, f"{uuid.uuid4().hex}.mp4")
 
-    open(video_path, "wb").write(requests.get(req.video_url).content)
-    open(audio_path, "wb").write(requests.get(req.audio_url).content)
+    try:
+        # ---- LOG INPUT ----
+        logging.info(f"VIDEO URL: {req.video_url}")
+        logging.info(f"AUDIO URL: {req.audio_url}")
+        logging.info(f"SUBTITLE LEN: {len(req.subtitle_text)}")
 
-    cmd = [
-        "ffmpeg", "-y",
-        "-i", video_path,
-        "-i", audio_path,
-        "-shortest",
-        "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
-        "-c:v", "libx264",
-        "-preset", "veryfast",
-        "-pix_fmt", "yuv420p",
-        output_path
-    ]
+        # ---- DOWNLOAD FILES ----
+        v_res = requests.get(req.video_url, timeout=30)
+        a_res = requests.get(req.audio_url, timeout=30)
 
-    subprocess.run(cmd, check=True)
+        v_res.raise_for_status()
+        a_res.raise_for_status()
 
-    return {"video_url": f"{BASE_URL}/output/{os.path.basename(output_path)}"}
+        with open(video_path, "wb") as f:
+            f.write(v_res.content)
+
+        with open(audio_path, "wb") as f:
+            f.write(a_res.content)
+
+        # ---- VALIDATE FILE SIZE ----
+        if os.path.getsize(video_path) == 0:
+            raise Exception("Downloaded video is empty")
+
+        if os.path.getsize(audio_path) == 0:
+            raise Exception("Downloaded audio is empty")
+
+        logging.info(f"Video size: {os.path.getsize(video_path)}")
+        logging.info(f"Audio size: {os.path.getsize(audio_path)}")
+
+        # ---- FFMPEG ----
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", video_path,
+            "-i", audio_path,
+            "-shortest",
+            "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-pix_fmt", "yuv420p",
+            output_path
+        ]
+
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+
+        if result.returncode != 0:
+            logging.error(result.stderr)
+            raise Exception("FFmpeg failed")
+
+        return {
+            "video_url": f"{BASE_URL}/output/{os.path.basename(output_path)}"
+        }
+
+    except Exception as e:
+        logging.exception("Render failed")
+        return {"error": str(e)}
