@@ -8,7 +8,7 @@ from typing import Dict
 # =========================
 # APP INIT
 # =========================
-app = FastAPI()
+app = FastAPI(title="US Shorts Render API")
 logging.basicConfig(level=logging.INFO)
 
 BASE_URL = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").rstrip("/")
@@ -17,7 +17,6 @@ if not BASE_URL.startswith("http"):
 
 AUDIO_DIR = "audio"
 VIDEO_DIR = "output"
-TMP_DIR = "/tmp"
 
 os.makedirs(AUDIO_DIR, exist_ok=True)
 os.makedirs(VIDEO_DIR, exist_ok=True)
@@ -26,21 +25,12 @@ app.mount("/audio", StaticFiles(directory=AUDIO_DIR), name="audio")
 app.mount("/output", StaticFiles(directory=VIDEO_DIR), name="output")
 
 # =========================
-# FFMPEG DETECTION (CRITICAL)
-# =========================
-FFMPEG_PATH = shutil.which("ffmpeg")
-logging.info(f"FFMPEG_PATH = {FFMPEG_PATH}")
-
-if not FFMPEG_PATH:
-    logging.warning("FFMPEG NOT FOUND IN PATH")
-
-# =========================
 # IN-MEMORY JOB STORE
 # =========================
 RENDER_JOBS: Dict[str, dict] = {}
 
 # =========================
-# 1. SCRIPT
+# 1. SCRIPT GENERATOR
 # =========================
 class ScriptRequest(BaseModel):
     theme: str
@@ -83,18 +73,22 @@ async def tts(req: TTSRequest):
     }
 
 # =========================
-# 3. STOCK VIDEO
+# 3. STOCK VIDEO (PEXELS)
 # =========================
 class StockVideoRequest(BaseModel):
     query: str
 
 @app.post("/get-stock-video")
 async def get_stock_video(req: StockVideoRequest):
-    headers = {"Authorization": os.getenv("PEXELS_API_KEY")}
+    headers = {
+        "Authorization": os.getenv("PEXELS_API_KEY", "")
+    }
+
     url = (
         "https://api.pexels.com/videos/search"
         f"?query={req.query}&orientation=portrait&per_page=1"
     )
+
     res = requests.get(url, headers=headers, timeout=20)
     res.raise_for_status()
     data = res.json()
@@ -142,13 +136,15 @@ async def render_status(job_id: str):
 # BACKGROUND RENDER WORKER
 # =========================
 def run_render_job(job_id: str, req: RenderRequest):
-    video_path = os.path.join(TMP_DIR, f"{uuid.uuid4().hex}.mp4")
-    audio_path = os.path.join(TMP_DIR, f"{uuid.uuid4().hex}.mp3")
-    output_path = os.path.join(VIDEO_DIR, f"{uuid.uuid4().hex}.mp4")
+    video_path = f"/tmp/{uuid.uuid4().hex}.mp4"
+    audio_path = f"/tmp/{uuid.uuid4().hex}.mp3"
+    output_filename = f"{uuid.uuid4().hex}.mp4"
+    output_path = os.path.join(VIDEO_DIR, output_filename)
 
     try:
-        if not FFMPEG_PATH:
-            raise RuntimeError("ffmpeg binary not found in runtime PATH")
+        # Validate ffmpeg
+        if not shutil.which("ffmpeg"):
+            raise RuntimeError("ffmpeg not found in PATH")
 
         logging.info(f"[{job_id}] Downloading video")
         v = requests.get(req.video_url, timeout=60)
@@ -167,8 +163,7 @@ def run_render_job(job_id: str, req: RenderRequest):
         logging.info(f"[{job_id}] Running ffmpeg")
 
         cmd = [
-            FFMPEG_PATH,
-            "-y",
+            "ffmpeg", "-y",
             "-i", video_path,
             "-i", audio_path,
             "-shortest",
@@ -192,10 +187,10 @@ def run_render_job(job_id: str, req: RenderRequest):
 
         RENDER_JOBS[job_id]["status"] = "done"
         RENDER_JOBS[job_id]["video_url"] = (
-            f"{BASE_URL}/output/{os.path.basename(output_path)}"
+            f"{BASE_URL}/output/{output_filename}"
         )
 
-        logging.info(f"[{job_id}] Render done")
+        logging.info(f"[{job_id}] Render completed")
 
     except Exception as e:
         logging.exception(f"[{job_id}] Render failed")
@@ -203,11 +198,14 @@ def run_render_job(job_id: str, req: RenderRequest):
         RENDER_JOBS[job_id]["error"] = str(e)
 
 # =========================
-# DEBUG ENDPOINT (TEMP)
+# ENTRYPOINT (RAILWAY SAFE)
 # =========================
-@app.get("/debug/ffmpeg")
-def debug_ffmpeg():
-    return {
-        "which": shutil.which("ffmpeg"),
-        "version": subprocess.getoutput("ffmpeg -version")
-    }
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=port,
+        reload=False
+    )
