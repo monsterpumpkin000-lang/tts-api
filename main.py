@@ -1,14 +1,14 @@
-from fastapi import FastAPI, BackgroundTasks
+from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-import uuid, os, subprocess, requests, math, logging, shutil
+import uuid, os, subprocess, requests, math, logging, threading, shutil
 import edge_tts
 from typing import Dict
 
 # =========================
 # APP INIT
 # =========================
-app = FastAPI(title="US Shorts Render API")
+app = FastAPI()
 logging.basicConfig(level=logging.INFO)
 
 BASE_URL = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").rstrip("/")
@@ -30,12 +30,26 @@ app.mount("/output", StaticFiles(directory=VIDEO_DIR), name="output")
 RENDER_JOBS: Dict[str, dict] = {}
 
 # =========================
-# 1. SCRIPT GENERATOR
+# MODELS
 # =========================
 class ScriptRequest(BaseModel):
     theme: str
     audience: str
 
+class TTSRequest(BaseModel):
+    text: str
+
+class StockVideoRequest(BaseModel):
+    query: str
+
+class RenderRequest(BaseModel):
+    video_url: str
+    audio_url: str
+    subtitle_text: str
+
+# =========================
+# 1. SCRIPT
+# =========================
 @app.post("/generate-script")
 async def generate_script(req: ScriptRequest):
     hook = "Small daily habits build unshakable confidence."
@@ -51,9 +65,6 @@ async def generate_script(req: ScriptRequest):
 # =========================
 # 2. TTS
 # =========================
-class TTSRequest(BaseModel):
-    text: str
-
 @app.post("/tts")
 async def tts(req: TTSRequest):
     filename = f"{uuid.uuid4().hex}.mp3"
@@ -73,17 +84,11 @@ async def tts(req: TTSRequest):
     }
 
 # =========================
-# 3. STOCK VIDEO (PEXELS)
+# 3. STOCK VIDEO
 # =========================
-class StockVideoRequest(BaseModel):
-    query: str
-
 @app.post("/get-stock-video")
 async def get_stock_video(req: StockVideoRequest):
-    headers = {
-        "Authorization": os.getenv("PEXELS_API_KEY", "")
-    }
-
+    headers = {"Authorization": os.getenv("PEXELS_API_KEY")}
     url = (
         "https://api.pexels.com/videos/search"
         f"?query={req.query}&orientation=portrait&per_page=1"
@@ -98,13 +103,8 @@ async def get_stock_video(req: StockVideoRequest):
     }
 
 # =========================
-# 4. RENDER VIDEO (ASYNC)
+# 4. RENDER VIDEO (ASYNC THREAD)
 # =========================
-class RenderRequest(BaseModel):
-    video_url: str
-    audio_url: str
-    subtitle_text: str
-
 @app.post("/render-video/start")
 async def start_render(req: RenderRequest):
     job_id = uuid.uuid4().hex
@@ -115,7 +115,12 @@ async def start_render(req: RenderRequest):
         "error": None
     }
 
-    run_render_job(job_id, req)
+    thread = threading.Thread(
+        target=run_render_job,
+        args=(job_id, req),
+        daemon=True
+    )
+    thread.start()
 
     return {
         "job_id": job_id,
@@ -133,16 +138,17 @@ async def render_status(job_id: str):
 # BACKGROUND RENDER WORKER
 # =========================
 def run_render_job(job_id: str, req: RenderRequest):
+    ffmpeg_path = shutil.which("ffmpeg")
+    if not ffmpeg_path:
+        RENDER_JOBS[job_id]["status"] = "error"
+        RENDER_JOBS[job_id]["error"] = "ffmpeg not found in system"
+        return
+
     video_path = f"/tmp/{uuid.uuid4().hex}.mp4"
     audio_path = f"/tmp/{uuid.uuid4().hex}.mp3"
-    output_filename = f"{uuid.uuid4().hex}.mp4"
-    output_path = os.path.join(VIDEO_DIR, output_filename)
+    output_path = os.path.join(VIDEO_DIR, f"{uuid.uuid4().hex}.mp4")
 
     try:
-        # Validate ffmpeg
-        if not shutil.which("ffmpeg"):
-            raise RuntimeError("ffmpeg not found in PATH")
-
         logging.info(f"[{job_id}] Downloading video")
         v = requests.get(req.video_url, timeout=60)
         v.raise_for_status()
@@ -160,7 +166,7 @@ def run_render_job(job_id: str, req: RenderRequest):
         logging.info(f"[{job_id}] Running ffmpeg")
 
         cmd = [
-            "ffmpeg", "-y",
+            ffmpeg_path, "-y",
             "-i", video_path,
             "-i", audio_path,
             "-shortest",
@@ -184,25 +190,12 @@ def run_render_job(job_id: str, req: RenderRequest):
 
         RENDER_JOBS[job_id]["status"] = "finished"
         RENDER_JOBS[job_id]["video_url"] = (
-            f"{BASE_URL}/output/{output_filename}"
+            f"{BASE_URL}/output/{os.path.basename(output_path)}"
         )
 
-        logging.info(f"[{job_id}] Render completed")
+        logging.info(f"[{job_id}] Render finished")
 
     except Exception as e:
         logging.exception(f"[{job_id}] Render failed")
         RENDER_JOBS[job_id]["status"] = "error"
         RENDER_JOBS[job_id]["error"] = str(e)
-
-# =========================
-# ENTRYPOINT (RAILWAY SAFE)
-# =========================
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.getenv("PORT", 8000))
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=port,
-        reload=False
-    )
