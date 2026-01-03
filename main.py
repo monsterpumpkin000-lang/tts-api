@@ -106,23 +106,20 @@ class RenderRequest(BaseModel):
     subtitle_text: str
 
 @app.post("/render-video/start")
-async def start_render(
-    req: RenderRequest,
-    background_tasks: BackgroundTasks
-):
+async def start_render(req: RenderRequest):
     job_id = uuid.uuid4().hex
 
     RENDER_JOBS[job_id] = {
-        "status": "pending",
+        "status": "processing",
         "video_url": None,
         "error": None
     }
 
-    background_tasks.add_task(run_render_job, job_id, req)
+    run_render_job(job_id, req)
 
     return {
         "job_id": job_id,
-        "status": "started"
+        "status": "processing"
     }
 
 @app.get("/render-video/status/{job_id}")
@@ -185,7 +182,7 @@ def run_render_job(job_id: str, req: RenderRequest):
         if result.returncode != 0:
             raise RuntimeError(result.stderr)
 
-        RENDER_JOBS[job_id]["status"] = "done"
+        RENDER_JOBS[job_id]["status"] = "finished"
         RENDER_JOBS[job_id]["video_url"] = (
             f"{BASE_URL}/output/{output_filename}"
         )
