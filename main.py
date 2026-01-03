@@ -8,12 +8,14 @@ from typing import Dict
 # =========================
 # APP INIT
 # =========================
-app = FastAPI()
 logging.basicConfig(level=logging.INFO)
 
-BASE_URL = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").rstrip("/")
-if not BASE_URL.startswith("http"):
+app = FastAPI()
+
+BASE_URL = os.getenv("RAILWAY_PUBLIC_DOMAIN", "")
+if BASE_URL and not BASE_URL.startswith("http"):
     BASE_URL = "https://" + BASE_URL
+BASE_URL = BASE_URL.rstrip("/")
 
 AUDIO_DIR = "audio"
 VIDEO_DIR = "output"
@@ -25,12 +27,19 @@ app.mount("/audio", StaticFiles(directory=AUDIO_DIR), name="audio")
 app.mount("/output", StaticFiles(directory=VIDEO_DIR), name="output")
 
 # =========================
-# JOB STORE
+# HEALTH CHECK (WAJIB)
+# =========================
+@app.get("/")
+def health():
+    return {"status": "ok"}
+
+# =========================
+# IN-MEMORY JOB STORE
 # =========================
 RENDER_JOBS: Dict[str, dict] = {}
 
 # =========================
-# 1. SCRIPT (TIDAK DIUBAH)
+# 1. SCRIPT
 # =========================
 class ScriptRequest(BaseModel):
     theme: str
@@ -80,16 +89,18 @@ class StockVideoRequest(BaseModel):
 
 @app.post("/get-stock-video")
 async def get_stock_video(req: StockVideoRequest):
-    headers = {"Authorization": os.getenv("PEXELS_API_KEY")}
-    res = requests.get(
-        "https://api.pexels.com/videos/search",
-        params={"query": req.query, "orientation": "portrait", "per_page": 1},
-        headers=headers,
-        timeout=20
+    headers = {"Authorization": os.getenv("PEXELS_API_KEY", "")}
+    url = (
+        "https://api.pexels.com/videos/search"
+        f"?query={req.query}&orientation=portrait&per_page=1"
     )
+    res = requests.get(url, headers=headers, timeout=20)
     res.raise_for_status()
     data = res.json()
-    return {"video_url": data["videos"][0]["video_files"][0]["link"]}
+
+    return {
+        "video_url": data["videos"][0]["video_files"][0]["link"]
+    }
 
 # =========================
 # 4. RENDER VIDEO
@@ -114,40 +125,36 @@ async def start_render(req: RenderRequest, background_tasks: BackgroundTasks):
     return {"job_id": job_id, "status": "started"}
 
 @app.get("/render-video/status/{job_id}")
-async def render_status(job_id: str):
+def render_status(job_id: str):
     return RENDER_JOBS.get(job_id, {"status": "not_found"})
 
 # =========================
 # BACKGROUND WORKER
 # =========================
 def run_render_job(job_id: str, req: RenderRequest):
-    ffmpeg_path = shutil.which("ffmpeg")
-    if not ffmpeg_path:
-        RENDER_JOBS[job_id]["status"] = "error"
-        RENDER_JOBS[job_id]["error"] = "ffmpeg not found"
-        return
-
-    RENDER_JOBS[job_id]["status"] = "processing"
-
-    video_path = f"/tmp/{uuid.uuid4().hex}.mp4"
-    audio_path = f"/tmp/{uuid.uuid4().hex}.mp3"
-    output_path = os.path.join(VIDEO_DIR, f"{uuid.uuid4().hex}.mp4")
-
     try:
-        requests.get(req.video_url, timeout=60).raise_for_status()
-        with open(video_path, "wb") as f:
-            f.write(requests.get(req.video_url).content)
+        ffmpeg_path = shutil.which("ffmpeg")
+        if not ffmpeg_path:
+            raise RuntimeError("ffmpeg not found in PATH")
 
-        with open(audio_path, "wb") as f:
-            f.write(requests.get(req.audio_url).content)
+        video_tmp = f"/tmp/{uuid.uuid4().hex}.mp4"
+        audio_tmp = f"/tmp/{uuid.uuid4().hex}.mp3"
+        output_path = os.path.join(VIDEO_DIR, f"{uuid.uuid4().hex}.mp4")
+
+        with open(video_tmp, "wb") as f:
+            f.write(requests.get(req.video_url, timeout=60).content)
+
+        with open(audio_tmp, "wb") as f:
+            f.write(requests.get(req.audio_url, timeout=60).content)
 
         cmd = [
             ffmpeg_path, "-y",
-            "-i", video_path,
-            "-i", audio_path,
+            "-i", video_tmp,
+            "-i", audio_tmp,
             "-shortest",
             "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
             "-c:v", "libx264",
+            "-preset", "veryfast",
             "-pix_fmt", "yuv420p",
             output_path
         ]
@@ -158,5 +165,6 @@ def run_render_job(job_id: str, req: RenderRequest):
         RENDER_JOBS[job_id]["video_url"] = f"{BASE_URL}/output/{os.path.basename(output_path)}"
 
     except Exception as e:
+        logging.exception("Render failed")
         RENDER_JOBS[job_id]["status"] = "error"
         RENDER_JOBS[job_id]["error"] = str(e)
