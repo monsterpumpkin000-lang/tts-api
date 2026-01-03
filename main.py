@@ -118,13 +118,19 @@ class RenderRequest(BaseModel):
 @app.post("/render-video/start")
 async def start_render(req: RenderRequest, background_tasks: BackgroundTasks):
     job_id = uuid.uuid4().hex
+
     RENDER_JOBS[job_id] = {
-        "status": "pending",
+        "status": "queued",
         "video_url": None,
         "error": None
     }
+
     background_tasks.add_task(run_render_job, job_id, req)
-    return {"job_id": job_id, "status": "started"}
+
+    return {
+        "job_id": job_id,
+        "status": "queued"
+    }
 
 @app.get("/render-video/status/{job_id}")
 def render_status(job_id: str):
@@ -132,6 +138,8 @@ def render_status(job_id: str):
 
 def run_render_job(job_id: str, req: RenderRequest):
     try:
+        RENDER_JOBS[job_id]["status"] = "rendering"
+
         ffmpeg = shutil.which("ffmpeg")
         if not ffmpeg:
             raise RuntimeError("ffmpeg not found")
@@ -140,25 +148,36 @@ def run_render_job(job_id: str, req: RenderRequest):
         audio_tmp = f"/tmp/{uuid.uuid4().hex}.mp3"
         output_path = os.path.join(VIDEO_DIR, f"{uuid.uuid4().hex}.mp4")
 
-        open(video_tmp, "wb").write(requests.get(req.video_url, timeout=60).content)
-        open(audio_tmp, "wb").write(requests.get(req.audio_url, timeout=60).content)
+        # download assets
+        with requests.get(req.video_url, stream=True, timeout=60) as r:
+            r.raise_for_status()
+            with open(video_tmp, "wb") as f:
+                shutil.copyfileobj(r.raw, f)
 
-        subprocess.run(
-            [
-                ffmpeg, "-y",
-                "-i", video_tmp,
-                "-i", audio_tmp,
-                "-shortest",
-                "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
-                "-c:v", "libx264",
-                "-pix_fmt", "yuv420p",
-                output_path
-            ],
-            check=True
-        )
+        with requests.get(req.audio_url, stream=True, timeout=60) as r:
+            r.raise_for_status()
+            with open(audio_tmp, "wb") as f:
+                shutil.copyfileobj(r.raw, f)
+
+        cmd = [
+            ffmpeg, "-y",
+            "-i", video_tmp,
+            "-i", audio_tmp,
+            "-shortest",
+            "-vf",
+            "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-pix_fmt", "yuv420p",
+            output_path
+        ]
+
+        subprocess.run(cmd, check=True)
 
         RENDER_JOBS[job_id]["status"] = "finished"
-        RENDER_JOBS[job_id]["video_url"] = f"{BASE_URL}/output/{os.path.basename(output_path)}"
+        RENDER_JOBS[job_id]["video_url"] = (
+            f"{BASE_URL}/output/{os.path.basename(output_path)}"
+        )
 
     except Exception as e:
         logging.exception("Render failed")
