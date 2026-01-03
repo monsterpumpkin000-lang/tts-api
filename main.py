@@ -102,16 +102,13 @@ async def render_video(req: RenderRequest):
     output_path = os.path.join(VIDEO_DIR, output_file)
 
     # Download assets
-    def download_file(url, path):
-    with requests.get(url, stream=True, timeout=60) as r:
-        r.raise_for_status()
-        with open(path, "wb") as f:
-            for chunk in r.iter_content(chunk_size=1024 * 1024):
-                if chunk:
-                    f.write(chunk)
-
-download_file(req.video_url, video_path)
-download_file(req.audio_url, audio_path)
+   def download_file(url, path):
+    r = requests.get(url, stream=True, timeout=60)
+    r.raise_for_status()
+    with open(path, "wb") as f:
+        for chunk in r.iter_content(chunk_size=1024 * 1024):
+            if chunk:
+                f.write(chunk)
 
     # SAFE & FAST PRESET
     vf = (
