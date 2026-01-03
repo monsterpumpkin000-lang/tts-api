@@ -109,12 +109,9 @@ async def render_video(req: RenderRequest):
     vf = (
     "scale=1080:1920:force_original_aspect_ratio=increase,"
     "crop=1080:1920,"
-    "eq=contrast=1.05:saturation=1.08:brightness=0.02,"
-    "drawtext=text='{text}':"
-    "fontcolor=white:fontsize=56:"
-    "borderw=3:bordercolor=black:"
-    "x=(w-text_w)/2:y=h*0.72"
-).format(text=req.subtitle_text.replace("'", "\\'"))
+    "eq=contrast=1.05:saturation=1.08:brightness=0.02"
+)
+
 
     cmd = [
     "ffmpeg", "-y",
