@@ -1,7 +1,7 @@
 from fastapi import FastAPI, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-import uuid, os, subprocess, requests, math, logging
+import uuid, os, subprocess, requests, math, logging, shutil
 import edge_tts
 from typing import Dict
 
@@ -17,12 +17,22 @@ if not BASE_URL.startswith("http"):
 
 AUDIO_DIR = "audio"
 VIDEO_DIR = "output"
+TMP_DIR = "/tmp"
 
 os.makedirs(AUDIO_DIR, exist_ok=True)
 os.makedirs(VIDEO_DIR, exist_ok=True)
 
 app.mount("/audio", StaticFiles(directory=AUDIO_DIR), name="audio")
 app.mount("/output", StaticFiles(directory=VIDEO_DIR), name="output")
+
+# =========================
+# FFMPEG DETECTION (CRITICAL)
+# =========================
+FFMPEG_PATH = shutil.which("ffmpeg")
+logging.info(f"FFMPEG_PATH = {FFMPEG_PATH}")
+
+if not FFMPEG_PATH:
+    logging.warning("FFMPEG NOT FOUND IN PATH")
 
 # =========================
 # IN-MEMORY JOB STORE
@@ -49,7 +59,7 @@ async def generate_script(req: ScriptRequest):
     }
 
 # =========================
-# 2. TTS (STABLE)
+# 2. TTS
 # =========================
 class TTSRequest(BaseModel):
     text: str
@@ -88,6 +98,7 @@ async def get_stock_video(req: StockVideoRequest):
     res = requests.get(url, headers=headers, timeout=20)
     res.raise_for_status()
     data = res.json()
+
     return {
         "video_url": data["videos"][0]["video_files"][0]["link"]
     }
@@ -131,13 +142,14 @@ async def render_status(job_id: str):
 # BACKGROUND RENDER WORKER
 # =========================
 def run_render_job(job_id: str, req: RenderRequest):
-    video_path = f"/tmp/{uuid.uuid4().hex}.mp4"
-    audio_path = f"/tmp/{uuid.uuid4().hex}.mp3"
-    output_path = os.path.join(
-        VIDEO_DIR, f"{uuid.uuid4().hex}.mp4"
-    )
+    video_path = os.path.join(TMP_DIR, f"{uuid.uuid4().hex}.mp4")
+    audio_path = os.path.join(TMP_DIR, f"{uuid.uuid4().hex}.mp3")
+    output_path = os.path.join(VIDEO_DIR, f"{uuid.uuid4().hex}.mp4")
 
     try:
+        if not FFMPEG_PATH:
+            raise RuntimeError("ffmpeg binary not found in runtime PATH")
+
         logging.info(f"[{job_id}] Downloading video")
         v = requests.get(req.video_url, timeout=60)
         v.raise_for_status()
@@ -155,7 +167,8 @@ def run_render_job(job_id: str, req: RenderRequest):
         logging.info(f"[{job_id}] Running ffmpeg")
 
         cmd = [
-            "ffmpeg", "-y",
+            FFMPEG_PATH,
+            "-y",
             "-i", video_path,
             "-i", audio_path,
             "-shortest",
@@ -175,7 +188,7 @@ def run_render_job(job_id: str, req: RenderRequest):
         )
 
         if result.returncode != 0:
-            raise Exception(result.stderr)
+            raise RuntimeError(result.stderr)
 
         RENDER_JOBS[job_id]["status"] = "done"
         RENDER_JOBS[job_id]["video_url"] = (
@@ -188,3 +201,13 @@ def run_render_job(job_id: str, req: RenderRequest):
         logging.exception(f"[{job_id}] Render failed")
         RENDER_JOBS[job_id]["status"] = "error"
         RENDER_JOBS[job_id]["error"] = str(e)
+
+# =========================
+# DEBUG ENDPOINT (TEMP)
+# =========================
+@app.get("/debug/ffmpeg")
+def debug_ffmpeg():
+    return {
+        "which": shutil.which("ffmpeg"),
+        "version": subprocess.getoutput("ffmpeg -version")
+    }
