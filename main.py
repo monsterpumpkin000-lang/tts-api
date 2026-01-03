@@ -56,10 +56,15 @@ async def tts(req: TTSRequest):
 
     duration = max(3, math.ceil(len(req.text.split()) * 0.45))
 
-    return {
-        "audio_url": f"{BASE_URL}/audio/{filename}",
-        "duration": duration
-    }
+   PUBLIC_BASE = os.getenv("RAILWAY_PUBLIC_DOMAIN")
+
+if not PUBLIC_BASE.startswith("http"):
+    PUBLIC_BASE = "https://" + PUBLIC_BASE
+
+return {
+    "audio_url": f"{PUBLIC_BASE}/audio/{filename}",
+    "duration": duration
+}
 
 
 # =========================
