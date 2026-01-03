@@ -38,7 +38,7 @@ async def generate_script(req: ScriptRequest):
 
 
 # =========================
-# 2. TTS
+# 2. TTS (FIXED)
 # =========================
 class TTSRequest(BaseModel):
     text: str
@@ -56,16 +56,17 @@ async def tts(req: TTSRequest):
 
     duration = max(3, math.ceil(len(req.text.split()) * 0.45))
 
-   PUBLIC_BASE = os.getenv("RAILWAY_PUBLIC_DOMAIN")
+    PUBLIC_BASE = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip()
+    if not PUBLIC_BASE:
+        raise RuntimeError("RAILWAY_PUBLIC_DOMAIN is not set")
 
-if not PUBLIC_BASE.startswith("http"):
-    PUBLIC_BASE = "https://" + PUBLIC_BASE
+    if not PUBLIC_BASE.startswith("http"):
+        PUBLIC_BASE = "https://" + PUBLIC_BASE
 
-return {
-    "audio_url": f"{PUBLIC_BASE}/audio/{filename}",
-    "duration": duration
-}
-
+    return {
+        "audio_url": f"{PUBLIC_BASE}/audio/{filename}",
+        "duration": duration
+    }
 
 # =========================
 # 3. STOCK VIDEO
