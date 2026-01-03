@@ -50,16 +50,28 @@ class RenderRequest(BaseModel):
 # =========================
 # 1. SCRIPT
 # =========================
+class ScriptRequest(BaseModel):
+    theme: str
+    audience: str
+    angle: str | None = None
+    core_truth: str | None = None
+    emotion: str | None = None
+    tone_rules: list[str] | None = []
+    duration_sec: int | None = 30
+
+
 @app.post("/generate-script")
 async def generate_script(req: ScriptRequest):
-    hook = "Small daily habits build unshakable confidence."
-    body = "Consistency beats motivation when motivation fades."
+    hook = f"{req.core_truth or 'Discipline builds strength.'}"
+    body = f"{req.angle or 'Consistency matters more than motivation.'}"
     ending = "Start today. Stay consistent."
 
+    voice_text = f"{hook} {body} {ending}"
+
     return {
-        "voice_text": f"{hook} {body} {ending}",
+        "voice_text": voice_text,
         "subtitle_text": f"{hook} {body}",
-        "video_query": "cinematic calm nature"
+        "video_query": "cinematic calm discipline lifestyle"
     }
 
 # =========================
