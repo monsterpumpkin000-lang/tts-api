@@ -2,40 +2,29 @@ from fastapi import FastAPI, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import uuid, os, subprocess, requests, math, logging, shutil
-import edge_tts
 from typing import Dict
 
 # =========================
 # APP INIT
 # =========================
 logging.basicConfig(level=logging.INFO)
-
 app = FastAPI()
 
 @app.get("/")
 def health():
     return {"status": "ok"}
 
-BASE_URL = os.getenv("RAILWAY_PUBLIC_DOMAIN", "")
+BASE_URL = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").rstrip("/")
 if BASE_URL and not BASE_URL.startswith("http"):
     BASE_URL = "https://" + BASE_URL
-BASE_URL = BASE_URL.rstrip("/")
 
 AUDIO_DIR = "audio"
 VIDEO_DIR = "output"
-
 os.makedirs(AUDIO_DIR, exist_ok=True)
 os.makedirs(VIDEO_DIR, exist_ok=True)
 
 app.mount("/audio", StaticFiles(directory=AUDIO_DIR), name="audio")
 app.mount("/output", StaticFiles(directory=VIDEO_DIR), name="output")
-
-# =========================
-# HEALTH CHECK (WAJIB)
-# =========================
-@app.get("/")
-def health():
-    return {"status": "ok"}
 
 # =========================
 # IN-MEMORY JOB STORE
@@ -62,16 +51,14 @@ async def generate_script(req: ScriptRequest):
     }
 
 # =========================
-# 2. TTS
+# 2. TTS (SAFE LOAD)
 # =========================
 class TTSRequest(BaseModel):
     text: str
 
 @app.post("/tts")
 async def tts(req: TTSRequest):
-    global edge_tts
-    if edge_tts is None:
-        import edge_tts
+    import edge_tts  # ⬅️ IMPORT DI SINI SAJA
 
     filename = f"{uuid.uuid4().hex}.mp3"
     path = os.path.join(AUDIO_DIR, filename)
@@ -88,7 +75,6 @@ async def tts(req: TTSRequest):
         "audio_url": f"{BASE_URL}/audio/{filename}",
         "duration": duration
     }
-
 
 # =========================
 # 3. STOCK VIDEO
@@ -122,15 +108,8 @@ class RenderRequest(BaseModel):
 @app.post("/render-video/start")
 async def start_render(req: RenderRequest, background_tasks: BackgroundTasks):
     job_id = uuid.uuid4().hex
-
-    RENDER_JOBS[job_id] = {
-        "status": "pending",
-        "video_url": None,
-        "error": None
-    }
-
+    RENDER_JOBS[job_id] = {"status": "pending", "video_url": None, "error": None}
     background_tasks.add_task(run_render_job, job_id, req)
-
     return {"job_id": job_id, "status": "started"}
 
 @app.get("/render-video/status/{job_id}")
@@ -171,7 +150,9 @@ def run_render_job(job_id: str, req: RenderRequest):
         subprocess.run(cmd, check=True)
 
         RENDER_JOBS[job_id]["status"] = "finished"
-        RENDER_JOBS[job_id]["video_url"] = f"{BASE_URL}/output/{os.path.basename(output_path)}"
+        RENDER_JOBS[job_id]["video_url"] = (
+            f"{BASE_URL}/output/{os.path.basename(output_path)}"
+        )
 
     except Exception as e:
         logging.exception("Render failed")
