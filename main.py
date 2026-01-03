@@ -107,35 +107,33 @@ async def render_video(req: RenderRequest):
 
     # SAFE & FAST PRESET
     vf = (
-        "scale=1080:1920:force_original_aspect_ratio=increase,"
-        "crop=1080:1920,"
-        "eq=contrast=1.05:saturation=1.05:brightness=0.02,"
-        "drawtext="
-        "text='{text}':"
-        "fontcolor=white:"
-        "fontsize=58:"
-        "borderw=3:"
-        "bordercolor=black:"
-        "x=(w-text_w)/2:"
-        "y=h*0.75"
-    ).format(text=req.subtitle_text.replace(":", "\\:").replace("'", "\\'"))
+    "scale=1080:1920:force_original_aspect_ratio=increase,"
+    "crop=1080:1920,"
+    "eq=contrast=1.05:saturation=1.08:brightness=0.02,"
+    "drawtext=text='{text}':"
+    "fontcolor=white:fontsize=56:"
+    "borderw=3:bordercolor=black:"
+    "x=(w-text_w)/2:y=h*0.72"
+).format(text=req.subtitle_text.replace("'", "\\'"))
 
     cmd = [
-        "ffmpeg", "-y",
-        "-i", video_path,
-        "-i", audio_path,
-        "-map", "0:v:0",
-        "-map", "1:a:0",
-        "-c:v", "libx264",
-        "-preset", "veryfast",
-        "-pix_fmt", "yuv420p",
-        "-shortest",
-        "-vf", vf,
-        "-af", "volume=1.1",
-        output_path
-    ]
-
-    subprocess.run(cmd, check=True)
+    "ffmpeg", "-y",
+    "-loglevel", "error",
+    "-i", video_path,
+    "-i", audio_path,
+    "-map", "0:v:0",
+    "-map", "1:a:0",
+    "-c:v", "libx264",
+    "-preset", "ultrafast",
+    "-crf", "28",
+    "-pix_fmt", "yuv420p",
+    "-movflags", "+faststart",
+    "-shortest",
+    "-vf", vf,
+    "-c:a", "aac",
+    "-b:a", "128k",
+    output_path
+]
 
     return {
         "video_url": f"{BASE_URL}/output/{output_file}"
