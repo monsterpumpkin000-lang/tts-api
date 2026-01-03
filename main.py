@@ -1,12 +1,20 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-import uuid, os, subprocess, requests, random, math
+import uuid, os, subprocess, requests, math, logging
 import edge_tts
+from typing import Dict
 
+# =========================
+# APP INIT
+# =========================
 app = FastAPI()
+logging.basicConfig(level=logging.INFO)
 
 BASE_URL = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").rstrip("/")
+if not BASE_URL.startswith("http"):
+    BASE_URL = "https://" + BASE_URL
+
 AUDIO_DIR = "audio"
 VIDEO_DIR = "output"
 
@@ -16,6 +24,10 @@ os.makedirs(VIDEO_DIR, exist_ok=True)
 app.mount("/audio", StaticFiles(directory=AUDIO_DIR), name="audio")
 app.mount("/output", StaticFiles(directory=VIDEO_DIR), name="output")
 
+# =========================
+# IN-MEMORY JOB STORE
+# =========================
+RENDER_JOBS: Dict[str, dict] = {}
 
 # =========================
 # 1. SCRIPT
@@ -36,9 +48,8 @@ async def generate_script(req: ScriptRequest):
         "video_query": "cinematic calm nature"
     }
 
-
 # =========================
-# 2. TTS (FIXED)
+# 2. TTS (STABLE)
 # =========================
 class TTSRequest(BaseModel):
     text: str
@@ -56,15 +67,8 @@ async def tts(req: TTSRequest):
 
     duration = max(3, math.ceil(len(req.text.split()) * 0.45))
 
-    PUBLIC_BASE = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip()
-    if not PUBLIC_BASE:
-        raise RuntimeError("RAILWAY_PUBLIC_DOMAIN is not set")
-
-    if not PUBLIC_BASE.startswith("http"):
-        PUBLIC_BASE = "https://" + PUBLIC_BASE
-
     return {
-        "audio_url": f"{PUBLIC_BASE}/audio/{filename}",
+        "audio_url": f"{BASE_URL}/audio/{filename}",
         "duration": duration
     }
 
@@ -77,66 +81,86 @@ class StockVideoRequest(BaseModel):
 @app.post("/get-stock-video")
 async def get_stock_video(req: StockVideoRequest):
     headers = {"Authorization": os.getenv("PEXELS_API_KEY")}
-    url = f"https://api.pexels.com/videos/search?query={req.query}&orientation=portrait&per_page=1"
+    url = (
+        "https://api.pexels.com/videos/search"
+        f"?query={req.query}&orientation=portrait&per_page=1"
+    )
     res = requests.get(url, headers=headers, timeout=20)
     res.raise_for_status()
     data = res.json()
-    return {"video_url": data["videos"][0]["video_files"][0]["link"]}
-
+    return {
+        "video_url": data["videos"][0]["video_files"][0]["link"]
+    }
 
 # =========================
-# 4. RENDER VIDEO (FIXED & SAFE)
+# 4. RENDER VIDEO (ASYNC)
 # =========================
-import logging
-logging.basicConfig(level=logging.INFO)
-
 class RenderRequest(BaseModel):
     video_url: str
     audio_url: str
     subtitle_text: str
 
-@app.post("/render-video")
-async def render_video(req: RenderRequest):
+@app.post("/render-video/start")
+async def start_render(
+    req: RenderRequest,
+    background_tasks: BackgroundTasks
+):
+    job_id = uuid.uuid4().hex
+
+    RENDER_JOBS[job_id] = {
+        "status": "pending",
+        "video_url": None,
+        "error": None
+    }
+
+    background_tasks.add_task(run_render_job, job_id, req)
+
+    return {
+        "job_id": job_id,
+        "status": "started"
+    }
+
+@app.get("/render-video/status/{job_id}")
+async def render_status(job_id: str):
+    job = RENDER_JOBS.get(job_id)
+    if not job:
+        return {"status": "not_found"}
+    return job
+
+# =========================
+# BACKGROUND RENDER WORKER
+# =========================
+def run_render_job(job_id: str, req: RenderRequest):
     video_path = f"/tmp/{uuid.uuid4().hex}.mp4"
     audio_path = f"/tmp/{uuid.uuid4().hex}.mp3"
-    output_path = os.path.join(VIDEO_DIR, f"{uuid.uuid4().hex}.mp4")
+    output_path = os.path.join(
+        VIDEO_DIR, f"{uuid.uuid4().hex}.mp4"
+    )
 
     try:
-        # ---- LOG INPUT ----
-        logging.info(f"VIDEO URL: {req.video_url}")
-        logging.info(f"AUDIO URL: {req.audio_url}")
-        logging.info(f"SUBTITLE LEN: {len(req.subtitle_text)}")
+        logging.info(f"[{job_id}] Downloading video")
+        v = requests.get(req.video_url, timeout=60)
+        v.raise_for_status()
 
-        # ---- DOWNLOAD FILES ----
-        v_res = requests.get(req.video_url, timeout=30)
-        a_res = requests.get(req.audio_url, timeout=30)
-
-        v_res.raise_for_status()
-        a_res.raise_for_status()
+        logging.info(f"[{job_id}] Downloading audio")
+        a = requests.get(req.audio_url, timeout=60)
+        a.raise_for_status()
 
         with open(video_path, "wb") as f:
-            f.write(v_res.content)
+            f.write(v.content)
 
         with open(audio_path, "wb") as f:
-            f.write(a_res.content)
+            f.write(a.content)
 
-        # ---- VALIDATE FILE SIZE ----
-        if os.path.getsize(video_path) == 0:
-            raise Exception("Downloaded video is empty")
+        logging.info(f"[{job_id}] Running ffmpeg")
 
-        if os.path.getsize(audio_path) == 0:
-            raise Exception("Downloaded audio is empty")
-
-        logging.info(f"Video size: {os.path.getsize(video_path)}")
-        logging.info(f"Audio size: {os.path.getsize(audio_path)}")
-
-        # ---- FFMPEG ----
         cmd = [
             "ffmpeg", "-y",
             "-i", video_path,
             "-i", audio_path,
             "-shortest",
-            "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
+            "-vf",
+            "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
             "-c:v", "libx264",
             "-preset", "veryfast",
             "-pix_fmt", "yuv420p",
@@ -151,13 +175,16 @@ async def render_video(req: RenderRequest):
         )
 
         if result.returncode != 0:
-            logging.error(result.stderr)
-            raise Exception("FFmpeg failed")
+            raise Exception(result.stderr)
 
-        return {
-            "video_url": f"{BASE_URL}/output/{os.path.basename(output_path)}"
-        }
+        RENDER_JOBS[job_id]["status"] = "done"
+        RENDER_JOBS[job_id]["video_url"] = (
+            f"{BASE_URL}/output/{os.path.basename(output_path)}"
+        )
+
+        logging.info(f"[{job_id}] Render done")
 
     except Exception as e:
-        logging.exception("Render failed")
-        return {"error": str(e)}
+        logging.exception(f"[{job_id}] Render failed")
+        RENDER_JOBS[job_id]["status"] = "error"
+        RENDER_JOBS[job_id]["error"] = str(e)
