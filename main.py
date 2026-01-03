@@ -12,6 +12,10 @@ logging.basicConfig(level=logging.INFO)
 
 app = FastAPI()
 
+@app.get("/")
+def health():
+    return {"status": "ok"}
+
 BASE_URL = os.getenv("RAILWAY_PUBLIC_DOMAIN", "")
 if BASE_URL and not BASE_URL.startswith("http"):
     BASE_URL = "https://" + BASE_URL
@@ -65,6 +69,10 @@ class TTSRequest(BaseModel):
 
 @app.post("/tts")
 async def tts(req: TTSRequest):
+    global edge_tts
+    if edge_tts is None:
+        import edge_tts
+
     filename = f"{uuid.uuid4().hex}.mp3"
     path = os.path.join(AUDIO_DIR, filename)
 
@@ -80,6 +88,7 @@ async def tts(req: TTSRequest):
         "audio_url": f"{BASE_URL}/audio/{filename}",
         "duration": duration
     }
+
 
 # =========================
 # 3. STOCK VIDEO
