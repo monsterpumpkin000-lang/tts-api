@@ -1,9 +1,9 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-import uuid, os, subprocess, requests, math, logging, threading, shutil
+from typing import Dict, List, Union, Optional
+import uuid, os, subprocess, requests, math, logging, json
 import edge_tts
-from typing import Dict
 
 # =========================
 # APP INIT
@@ -24,59 +24,65 @@ os.makedirs(VIDEO_DIR, exist_ok=True)
 app.mount("/audio", StaticFiles(directory=AUDIO_DIR), name="audio")
 app.mount("/output", StaticFiles(directory=VIDEO_DIR), name="output")
 
-# =========================
-# IN-MEMORY JOB STORE
-# =========================
 RENDER_JOBS: Dict[str, dict] = {}
 
 # =========================
-# MODELS
+# 1. SCRIPT (SAFE)
 # =========================
 class ScriptRequest(BaseModel):
     theme: str
     audience: str
-
-class TTSRequest(BaseModel):
-    text: str
-
-class StockVideoRequest(BaseModel):
-    query: str
-
-class RenderRequest(BaseModel):
-    video_url: str
-    audio_url: str
-    subtitle_text: str
-
-# =========================
-# 1. SCRIPT
-# =========================
-class ScriptRequest(BaseModel):
-    theme: str
-    audience: str
-    angle: str | None = None
-    core_truth: str | None = None
-    emotion: str | None = None
-    tone_rules: list[str] | None = []
-    duration_sec: int | None = 30
+    angle: Optional[str] = None
+    core_truth: Optional[str] = None
+    emotion: Optional[str] = None
+    tone_rules: Optional[Union[List[str], str]] = None
+    duration_sec: Optional[int] = 30
 
 
 @app.post("/generate-script")
 async def generate_script(req: ScriptRequest):
-    hook = f"{req.core_truth or 'Discipline builds strength.'}"
-    body = f"{req.angle or 'Consistency matters more than motivation.'}"
-    ending = "Start today. Stay consistent."
+    try:
+        # Normalize tone_rules
+        tone_rules = []
+        if isinstance(req.tone_rules, str):
+            try:
+                tone_rules = json.loads(req.tone_rules)
+            except:
+                tone_rules = [req.tone_rules]
+        elif isinstance(req.tone_rules, list):
+            tone_rules = req.tone_rules
 
-    voice_text = f"{hook} {body} {ending}"
+        hook = req.core_truth or "Small daily habits build real confidence."
+        body = req.angle or "Consistency beats motivation when motivation fades."
+        ending = "Start today. Stay consistent."
 
-    return {
-        "voice_text": voice_text,
-        "subtitle_text": f"{hook} {body}",
-        "video_query": "cinematic calm discipline lifestyle"
-    }
+        return {
+            "voice_text": f"{hook} {body} {ending}",
+            "subtitle_text": f"{hook} {body}",
+            "video_query": "cinematic calm confidence lifestyle",
+            "meta": {
+                "tone_rules": tone_rules,
+                "emotion": req.emotion,
+                "duration_sec": req.duration_sec
+            }
+        }
+
+    except Exception as e:
+        logging.exception("Generate script failed")
+        return {
+            "error": str(e),
+            "voice_text": "Consistency builds confidence over time.",
+            "subtitle_text": "Consistency builds confidence.",
+            "video_query": "cinematic calm lifestyle"
+        }
 
 # =========================
 # 2. TTS
 # =========================
+class TTSRequest(BaseModel):
+    text: str
+
+
 @app.post("/tts")
 async def tts(req: TTSRequest):
     filename = f"{uuid.uuid4().hex}.mp3"
@@ -98,6 +104,10 @@ async def tts(req: TTSRequest):
 # =========================
 # 3. STOCK VIDEO
 # =========================
+class StockVideoRequest(BaseModel):
+    query: str
+
+
 @app.post("/get-stock-video")
 async def get_stock_video(req: StockVideoRequest):
     headers = {"Authorization": os.getenv("PEXELS_API_KEY")}
@@ -105,7 +115,6 @@ async def get_stock_video(req: StockVideoRequest):
         "https://api.pexels.com/videos/search"
         f"?query={req.query}&orientation=portrait&per_page=1"
     )
-
     res = requests.get(url, headers=headers, timeout=20)
     res.raise_for_status()
     data = res.json()
@@ -115,99 +124,71 @@ async def get_stock_video(req: StockVideoRequest):
     }
 
 # =========================
-# 4. RENDER VIDEO (ASYNC THREAD)
+# 4. RENDER VIDEO (ASYNC)
 # =========================
+class RenderRequest(BaseModel):
+    video_url: str
+    audio_url: str
+    subtitle_text: str
+
+
 @app.post("/render-video/start")
-async def start_render(req: RenderRequest):
+async def start_render(req: RenderRequest, background_tasks: BackgroundTasks):
     job_id = uuid.uuid4().hex
 
     RENDER_JOBS[job_id] = {
-        "status": "processing",
+        "status": "pending",
         "video_url": None,
         "error": None
     }
 
-    thread = threading.Thread(
-        target=run_render_job,
-        args=(job_id, req),
-        daemon=True
-    )
-    thread.start()
+    background_tasks.add_task(run_render_job, job_id, req)
 
-    return {
-        "job_id": job_id,
-        "status": "processing"
-    }
+    return {"job_id": job_id, "status": "started"}
+
 
 @app.get("/render-video/status/{job_id}")
 async def render_status(job_id: str):
-    job = RENDER_JOBS.get(job_id)
-    if not job:
-        return {"status": "not_found"}
-    return job
+    return RENDER_JOBS.get(job_id, {"status": "not_found"})
 
 # =========================
-# BACKGROUND RENDER WORKER
+# BACKGROUND WORKER
 # =========================
 def run_render_job(job_id: str, req: RenderRequest):
-    ffmpeg_path = shutil.which("ffmpeg")
-    if not ffmpeg_path:
-        RENDER_JOBS[job_id]["status"] = "error"
-        RENDER_JOBS[job_id]["error"] = "ffmpeg not found in system"
-        return
-
     video_path = f"/tmp/{uuid.uuid4().hex}.mp4"
     audio_path = f"/tmp/{uuid.uuid4().hex}.mp3"
     output_path = os.path.join(VIDEO_DIR, f"{uuid.uuid4().hex}.mp4")
 
     try:
-        logging.info(f"[{job_id}] Downloading video")
-        v = requests.get(req.video_url, timeout=60)
-        v.raise_for_status()
-
-        logging.info(f"[{job_id}] Downloading audio")
-        a = requests.get(req.audio_url, timeout=60)
-        a.raise_for_status()
+        RENDER_JOBS[job_id]["status"] = "processing"
 
         with open(video_path, "wb") as f:
-            f.write(v.content)
+            f.write(requests.get(req.video_url, timeout=60).content)
 
         with open(audio_path, "wb") as f:
-            f.write(a.content)
-
-        logging.info(f"[{job_id}] Running ffmpeg")
+            f.write(requests.get(req.audio_url, timeout=60).content)
 
         cmd = [
-            ffmpeg_path, "-y",
+            "ffmpeg", "-y",
             "-i", video_path,
             "-i", audio_path,
             "-shortest",
-            "-vf",
-            "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
+            "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
             "-c:v", "libx264",
             "-preset", "veryfast",
             "-pix_fmt", "yuv420p",
             output_path
         ]
 
-        result = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
         if result.returncode != 0:
-            raise RuntimeError(result.stderr)
+            raise Exception(result.stderr.decode())
 
         RENDER_JOBS[job_id]["status"] = "finished"
-        RENDER_JOBS[job_id]["video_url"] = (
-            f"{BASE_URL}/output/{os.path.basename(output_path)}"
-        )
-
-        logging.info(f"[{job_id}] Render finished")
+        RENDER_JOBS[job_id]["video_url"] = f"{BASE_URL}/output/{os.path.basename(output_path)}"
 
     except Exception as e:
-        logging.exception(f"[{job_id}] Render failed")
+        logging.exception("Render failed")
         RENDER_JOBS[job_id]["status"] = "error"
         RENDER_JOBS[job_id]["error"] = str(e)
